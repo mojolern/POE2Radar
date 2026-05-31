@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 
 namespace POE2Radar.Overlay.Web;
@@ -12,6 +13,7 @@ public sealed class WatchedEntities
     {
         _filePath = filePath;
         Load();
+        if (_entries.Count == 0) LoadDefaults();
     }
 
     public IReadOnlyDictionary<string, WatchedEntry> All => _entries;
@@ -60,6 +62,23 @@ public sealed class WatchedEntities
             var list = JsonSerializer.Deserialize<List<WatchedEntry>>(json, Json);
             if (list == null) return;
             foreach (var e in list) _entries[e.Pattern] = e;
+        }
+        catch { }
+    }
+
+    private void LoadDefaults()
+    {
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            var name = asm.GetManifestResourceNames().FirstOrDefault(n => n.Contains("default_watched"));
+            if (name == null) return;
+            using var stream = asm.GetManifestResourceStream(name)!;
+            var list = JsonSerializer.Deserialize<List<WatchedEntry>>(stream, Json);
+            if (list == null) return;
+            foreach (var e in list) _entries[e.Pattern] = e;
+            Save();
+            Console.WriteLine($"  Loaded {list.Count} default watched entities");
         }
         catch { }
     }
