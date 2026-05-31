@@ -360,6 +360,20 @@ public sealed class OverlayRenderer : IDisposable
         }
 
         skipLandmarks:
+
+        // Pathfinding line
+        if (ctx.PathPoints is { Count: >= 2 } pp)
+        {
+            for (var i = 0; i < pp.Count - 1; i++)
+            {
+                var a = Project(new NumVec2(pp[i].X, pp[i].Y), player, center, scale);
+                var b = Project(new NumVec2(pp[i + 1].X, pp[i + 1].Y), player, center, scale);
+                rt.DrawLine(a, b, _bTrans!, rs?.PathWidth ?? 2.5f);
+            }
+            var end = Project(new NumVec2(pp[^1].X, pp[^1].Y), player, center, scale);
+            rt.FillEllipse(new Ellipse(end, 5f, 5f), _bTrans!);
+        }
+
         // Player blip on top.
         rt.FillEllipse(new Ellipse(center, 5f, 5f), _bPlayer!);
     }

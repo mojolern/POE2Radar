@@ -3,6 +3,7 @@ using NumVec2 = System.Numerics.Vector2;
 using POE2Radar.Core;
 using POE2Radar.Core.Cheats;
 using POE2Radar.Core.Game;
+using POE2Radar.Core.Pathfinding;
 using POE2Radar.Overlay.Input;
 using POE2Radar.Overlay.Native;
 using POE2Radar.Overlay.Web;
@@ -38,6 +39,9 @@ public sealed class RadarApp : IDisposable
     private volatile bool _shutdown;
 
     private DateTime _nextKeyAt = DateTime.MinValue;
+    private List<(int X, int Y)>? _pathPoints;
+    private NumVec2 _lastPathPlayerGrid;
+    private string _lastPathTarget = "";
 
     private const int LifeVk = 0x31, ManaVk = 0x32;
     private static readonly TimeSpan LifeCooldown = TimeSpan.FromMilliseconds(2500);
@@ -129,6 +133,7 @@ public sealed class RadarApp : IDisposable
                 _terrain ??= _live.Terrain(areaInstance);
                 _entities = _live.Entities(areaInstance);
                 _landmarks = _live.Landmarks(areaInstance);
+                UpdatePath(player);
             }
         }
 
@@ -158,7 +163,8 @@ public sealed class RadarApp : IDisposable
             CheatStatus: _cheats.GetStatus(),
             Radar: _radarSettings,
             OverlayVisible: _overlayVisible,
-            Watched: _watched);
+            Watched: _watched,
+            PathPoints: _pathPoints);
         _renderer.Render(ctx);
     }
 
@@ -219,6 +225,44 @@ public sealed class RadarApp : IDisposable
         {
             SendInputNative.Tap(ManaVk); _manaFiredAt = now; _flaskNote = $"mana@{v.ManaPct:F0}%";
         }
+    }
+
+    private void UpdatePath(NumVec2 playerGrid)
+    {
+        var target = _radarSettings.PathTarget;
+        if (!_radarSettings.ShowPath || string.IsNullOrEmpty(target) || _terrain == null)
+        {
+            _pathPoints = null;
+            return;
+        }
+
+        var playerMoved = (playerGrid - _lastPathPlayerGrid).Length() > 5f;
+        var targetChanged = target != _lastPathTarget;
+        if (!playerMoved && !targetChanged && _pathPoints != null) return;
+
+        _lastPathPlayerGrid = playerGrid;
+        _lastPathTarget = target;
+
+        Poe2Live.EntityDot? closest = null;
+        var closestDist = float.MaxValue;
+        foreach (var e in _entities)
+        {
+            if (!e.IsAlive && e.HpMax > 0) continue;
+            if (!e.Metadata.Contains(target, StringComparison.OrdinalIgnoreCase)) continue;
+            var d = (e.Grid - playerGrid).Length();
+            if (d < closestDist) { closestDist = d; closest = e; }
+        }
+
+        if (closest == null) { _pathPoints = null; return; }
+
+        var t = _terrain;
+        var px = (int)playerGrid.X;
+        var py = (int)playerGrid.Y;
+        var tx = (int)closest.Value.Grid.X;
+        var ty = (int)closest.Value.Grid.Y;
+
+        var result = AStarPathfinder.FindPath(t.Walkable, t.Width, t.Height, px, py, tx, ty);
+        _pathPoints = result != null ? AStarPathfinder.Simplify(result.Value.Points) : null;
     }
 
     private void HandleCalibrationKeys()

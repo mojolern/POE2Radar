@@ -57,6 +57,12 @@ public sealed class RadarSettings
     public string WatchedColor { get; set; } = "#ffffff";
     public string TerrainColor { get; set; } = "#1a3a1a";
 
+    // Pathfinding
+    public bool ShowPath { get; set; } = true;
+    public string PathTarget { get; set; } = "";
+    public string PathColor { get; set; } = "#00ffcc";
+    public float PathWidth { get; set; } = 2.5f;
+
     // Terrain
     public float TerrainOpacity { get; set; } = 1.0f;
 

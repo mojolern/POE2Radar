@@ -171,12 +171,21 @@ function renderEntities(){
     <td><span class="rarity-${e.rarity}">${e.rarity}</span></td>
     <td class="meta-short" title="${e.metadata}">${e.metadata}</td>
     <td>${e.hpMax>0?e.hpCur+'/'+e.hpMax:'-'}</td><td>${e.dist}</td>
-    <td>${e.watched?`<button class="btn btn-rm" onclick="rmByMeta('${esc(e.metadata)}')">Unwatch</button>`
-                    :`<button class="btn btn-add" onclick="quickWatch('${esc(e.metadata)}')">Watch</button>`}</td>
+    <td style="white-space:nowrap">
+      ${e.watched?`<button class="btn btn-rm" onclick="rmByMeta('${esc(e.metadata)}')">-</button>`
+                 :`<button class="btn btn-add" onclick="quickWatch('${esc(e.metadata)}')">Watch</button>`}
+      <button class="btn" style="background:#2a4a5a;color:#5cf" onclick="navigateTo('${esc(e.metadata)}')">Nav</button>
+    </td>
   </tr>`).join('');
 }
 function setCat(c){catFilter=c;renderEntities();}
 function filterEntities(){renderEntities();}
+
+async function navigateTo(meta){
+  const short=meta.split('/').pop().replace(/@\d+$/,'');
+  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({showPath:true,pathTarget:short})});
+}
 
 // ── WATCHED ──
 async function quickWatch(meta){
@@ -314,6 +323,12 @@ const settingsDef = [
     {key:'offsetY',label:'Offset Y',type:'num',min:-50,max:50,step:0.5},
     {key:'scaleMul',label:'Scale',type:'num',min:0.3,max:3,step:0.02},
   ]},
+  {section:'Pathfinding',items:[
+    {key:'showPath',label:'Enable Pathfinding',type:'bool'},
+    {key:'pathTarget',label:'Target Pattern',type:'text'},
+    {key:'pathColor',label:'Path Color',type:'color'},
+    {key:'pathWidth',label:'Path Width',type:'num',min:0.5,max:8,step:0.5},
+  ]},
   {section:'Auto-Flask',items:[
     {key:'hpThreshold',label:'HP Threshold %',type:'num',min:5,max:95,step:5},
     {key:'manaThreshold',label:'Mana Threshold %',type:'num',min:5,max:95,step:5},
@@ -332,6 +347,8 @@ async function loadSettings(){
         html+=`<input type="checkbox" ${v?'checked':''} onchange="setSetting('${item.key}',this.checked)">`;
       else if(item.type==='color')
         html+=`<input type="color" value="${v}" onchange="setSetting('${item.key}',this.value)">`;
+      else if(item.type==='text')
+        html+=`<input type="text" value="${v||''}" style="width:250px" onchange="setSetting('${item.key}',this.value)" placeholder="e.g. AreaTransition, Waypoint">`;
       else if(item.type==='num')
         html+=`<input type="range" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
           oninput="setSetting('${item.key}',parseFloat(this.value));this.nextElementSibling.textContent=this.value">

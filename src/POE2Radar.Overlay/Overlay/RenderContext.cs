@@ -27,4 +27,5 @@ public sealed record RenderContext(
     IReadOnlyDictionary<string, CheatInfo>? CheatStatus = null,
     RadarSettings? Radar = null,
     bool OverlayVisible = true,
-    POE2Radar.Overlay.Web.WatchedEntities? Watched = null);
+    POE2Radar.Overlay.Web.WatchedEntities? Watched = null,
+    List<(int X, int Y)>? PathPoints = null);
