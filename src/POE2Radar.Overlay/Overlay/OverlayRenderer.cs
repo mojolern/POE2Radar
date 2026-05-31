@@ -105,6 +105,8 @@ public sealed class OverlayRenderer : IDisposable
                     DrawMap(rt, ctx);
                 if (ctx.InGame && ctx.Radar?.ShowMinimap == true && !ctx.Map.IsVisible)
                     DrawMinimap(rt, ctx);
+                if (ctx.InspectedMeta != null)
+                    DrawInspector(rt, ctx);
             }
         }
         finally { rt.EndDraw(); }
@@ -435,6 +437,22 @@ public sealed class OverlayRenderer : IDisposable
 
         // Player blip on top.
         rt.FillEllipse(new Ellipse(center, 5f, 5f), _bPlayer!);
+    }
+
+    private void DrawInspector(ID2D1RenderTarget rt, RenderContext ctx)
+    {
+        if (ctx.InspectedMeta == null) return;
+        var name = ctx.InspectedName ?? "";
+        var meta = ctx.InspectedMeta;
+
+        const float ix = 10, iy = 72;
+        var boxW = Math.Max(name.Length, meta.Length) * 7.3f + 20;
+        rt.FillRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(ix, iy, ix + boxW, iy + 42), 4, 4), _bPanel!);
+        rt.DrawRoundedRectangle(
+            new RoundedRectangle(new Vortice.RawRectF(ix, iy, ix + boxW, iy + 42), 4, 4), _bPlayer!, 1f);
+        rt.DrawText(name, _tf!, new Rect(ix + 6, iy + 3, ix + boxW, iy + 18), _bText!);
+        rt.DrawText(meta, _tf!, new Rect(ix + 6, iy + 21, ix + boxW, iy + 36), _bCheatOff!);
     }
 
     private void DrawMinimap(ID2D1RenderTarget rt, RenderContext ctx)

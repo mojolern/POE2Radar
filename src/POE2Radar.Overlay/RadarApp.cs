@@ -50,6 +50,9 @@ public sealed class RadarApp : IDisposable
     private (int X, int Y)? _manualPathGridTarget;
     private readonly List<(float ScreenX, float ScreenY, string Metadata)> _entityScreenPos = new();
     private readonly ExplorationTracker _exploration = new();
+    private string? _inspectedEntity;
+    private string? _inspectedMeta;
+    private DateTime _inspectedAt;
     private readonly List<(float ScreenX, float ScreenY, float GridX, float GridY, string Name)> _landmarkScreenPos = new();
 
     private const int LifeVk = 0x31, ManaVk = 0x32;
@@ -118,6 +121,7 @@ public sealed class RadarApp : IDisposable
         HandleCheatKeys();
         HandleSettingsToggle();
         HandleAltClick();
+        HandleShiftInspect();
 
         var inGame = _live.TryResolve(out var inGameState, out var areaInstance, out var localPlayer);
         var player = NumVec2.Zero;
@@ -180,7 +184,9 @@ public sealed class RadarApp : IDisposable
             PathPoints: _pathPoints,
             EntityScreenPositions: _entityScreenPos,
             LandmarkScreenPositions: _landmarkScreenPos,
-            Exploration: _exploration);
+            Exploration: _exploration,
+            InspectedName: _inspectedEntity,
+            InspectedMeta: _inspectedMeta);
         _renderer.Render(ctx);
     }
 
@@ -272,10 +278,68 @@ public sealed class RadarApp : IDisposable
         }
     }
 
+    private void HandleShiftInspect()
+    {
+        var shiftHeld = Down(0x10); // VK_SHIFT
+        if (!shiftHeld && !Down(0x12)) // neither Shift nor Alt
+            _window.SetInteractive(false);
+        if (shiftHeld)
+            _window.SetInteractive(true);
+
+        if (!shiftHeld || !_window.HasClick) return;
+        _window.ConsumeClick();
+
+        if (_cameraMatrix == null || _cameraMatrix.Length < 16) return;
+
+        var cx = _window.ClickX;
+        var cy = _window.ClickY;
+        var W = (float)_window.Width;
+        var H = (float)_window.Height;
+        var m = _cameraMatrix;
+
+        string? bestMeta = null;
+        string? bestName = null;
+        var bestDist = 40f * 40f;
+
+        foreach (var e in _entities)
+        {
+            var w = e.World;
+            var cw = w.X * m[3] + w.Y * m[7] + w.Z * m[11] + m[15];
+            if (cw <= 0.001f) continue;
+            var px = w.X * m[0] + w.Y * m[4] + w.Z * m[8] + m[12];
+            var py = w.X * m[1] + w.Y * m[5] + w.Z * m[9] + m[13];
+            var sx = (px / cw / 2f + 0.5f) * W;
+            var sy = (0.5f - py / cw / 2f) * H;
+
+            var dx = sx - cx;
+            var dy = sy - cy;
+            var d2 = dx * dx + dy * dy;
+            if (d2 < bestDist)
+            {
+                bestDist = d2;
+                bestMeta = e.Metadata;
+                var parts = e.Metadata.Split('/');
+                bestName = $"{e.Category} | {parts[^1].Split('@')[0]} | {e.Rarity}" +
+                    (e.HpMax > 0 ? $" | HP {e.HpCur}/{e.HpMax}" : "") +
+                    (e.Poi ? " | POI" : "") +
+                    (e.IsFriendly ? " | Friendly" : "");
+            }
+        }
+
+        if (bestMeta != null)
+        {
+            _inspectedEntity = bestName;
+            _inspectedMeta = bestMeta;
+            _inspectedAt = DateTime.UtcNow;
+            Console.WriteLine($"\nInspect: {bestMeta}");
+            Console.WriteLine($"  {bestName}");
+        }
+    }
+
     private void HandleAltClick()
     {
         var altHeld = Down(0x12); // VK_MENU (Alt)
-        _window.SetInteractive(altHeld);
+        if (altHeld) _window.SetInteractive(true);
 
         if (!altHeld || !_window.HasClick) return;
         _window.ConsumeClick();
