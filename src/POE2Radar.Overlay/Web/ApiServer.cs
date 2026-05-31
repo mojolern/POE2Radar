@@ -11,6 +11,7 @@ public sealed class ApiServer : IDisposable
     private readonly HttpListener _listener = new();
     private readonly Func<RadarState> _state;
     private readonly WatchedEntities _watched;
+    private readonly PathingTargets _pathing;
     private readonly RadarSettings _settings;
     private volatile bool _running;
 
@@ -18,10 +19,11 @@ public sealed class ApiServer : IDisposable
 
     public WatchedEntities Watched => _watched;
 
-    public ApiServer(Func<RadarState> state, WatchedEntities watched, RadarSettings settings, int port = 7777)
+    public ApiServer(Func<RadarState> state, WatchedEntities watched, RadarSettings settings, PathingTargets pathing, int port = 7777)
     {
         _state = state;
         _watched = watched;
+        _pathing = pathing;
         _settings = settings;
         _listener.Prefixes.Add($"http://localhost:{port}/");
     }
@@ -200,6 +202,40 @@ public sealed class ApiServer : IDisposable
                     }
                     catch (Exception ex) { WriteJson(ctx, new { error = ex.Message }, 400); }
                 }
+                break;
+            }
+
+            case "/api/pathing":
+            {
+                if (method == "GET")
+                    WriteJson(ctx, new { targets = _pathing.All, current = _pathing.CurrentIndex });
+                else if (method == "POST")
+                {
+                    var body = ReadBody(ctx);
+                    var entry = JsonSerializer.Deserialize<PathingEntry>(body, Json);
+                    if (entry != null) { _pathing.Add(entry.Pattern, entry.Label); WriteJson(ctx, new { ok = true }); }
+                    else WriteJson(ctx, new { error = "bad json" }, 400);
+                }
+                else if (method == "PUT")
+                {
+                    var body = ReadBody(ctx);
+                    var entry = JsonSerializer.Deserialize<PathingEntry>(body, Json);
+                    if (entry != null) { _pathing.Update(entry.Pattern, entry.Label, entry.Enabled); WriteJson(ctx, new { ok = true }); }
+                    else WriteJson(ctx, new { error = "bad json" }, 400);
+                }
+                else if (method == "DELETE")
+                {
+                    var pattern = q["pattern"];
+                    if (!string.IsNullOrEmpty(pattern)) { _pathing.Remove(pattern); WriteJson(ctx, new { ok = true }); }
+                    else WriteJson(ctx, new { error = "missing pattern" }, 400);
+                }
+                break;
+            }
+
+            case "/api/pathing/cycle":
+            {
+                var next = _pathing.CycleNext();
+                WriteJson(ctx, new { ok = true, current = next?.Pattern, label = next?.Label });
                 break;
             }
 

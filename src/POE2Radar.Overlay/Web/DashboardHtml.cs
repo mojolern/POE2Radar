@@ -67,6 +67,7 @@ tr.watched{background:#2a3a2a}
   <button class="tab" onclick="showTab('watched')">Watched</button>
   <button class="tab" onclick="showTab('database')">Database</button>
   <button class="tab" onclick="showTab('settings')">Radar Settings</button>
+  <button class="tab" onclick="showTab('pathing')">Pathing</button>
   <button class="tab" onclick="showTab('landmarks')">Landmarks</button>
 </div>
 
@@ -124,6 +125,21 @@ tr.watched{background:#2a3a2a}
   <div id="settingsBody"></div>
 </div>
 
+<!-- PATHING -->
+<div class="panel" id="tab-pathing">
+  <p style="font-size:12px;color:#aaa;margin-bottom:10px">
+    The radar auto-paths to the <b>nearest</b> entity matching any enabled target below.<br>
+    Press <b>F7</b> in-game to cycle through targets manually.
+  </p>
+  <div class="add-form">
+    <input type="text" id="pathAddPattern" placeholder="Metadata pattern" style="width:200px">
+    <input type="text" id="pathAddLabel" placeholder="Label" style="width:120px">
+    <button class="btn btn-add" onclick="addPathTarget()">Add</button>
+    <button class="btn" style="background:#2a4a5a;color:#5cf;margin-left:auto" onclick="cyclePathTarget()">Cycle Next (F7)</button>
+  </div>
+  <div id="pathingList" style="margin-top:8px"></div>
+</div>
+
 <!-- LANDMARKS -->
 <div class="panel" id="tab-landmarks">
   <div class="search"><input type="text" id="lmSearch" placeholder="Search landmarks..." style="width:300px" oninput="filterLandmarks()"></div>
@@ -143,6 +159,7 @@ function showTab(name){
   [...document.querySelectorAll('.tab')].find(t=>t.textContent.toLowerCase().includes(name.slice(0,4))||t.getAttribute('onclick')?.includes(name))?.classList.add('active');
   $('tab-'+name).classList.add('active');
   if(name==='watched')refreshWatched();
+  if(name==='pathing')refreshPathing();
   if(name==='landmarks')refreshLandmarks();
   if(name==='database'&&db.length===0)loadDb();
   if(name==='settings')loadSettings();
@@ -363,6 +380,38 @@ function setSetting(key,val){settings[key]=val;}
 async function saveSettings(){
   await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});
   $('savedMsg').classList.add('show');setTimeout(()=>$('savedMsg').classList.remove('show'),1500);
+}
+
+// ── PATHING ──
+async function refreshPathing(){
+  const data=await(await fetch('/api/pathing')).json();
+  const targets=data.targets, cur=data.current;
+  $('pathingList').innerHTML=targets.map((t,i)=>
+    `<div class="watched-item" style="${i===cur?'border-left:3px solid #5cf':'border-left:3px solid transparent'}">
+      <label style="font-size:11px;color:#888;white-space:nowrap"><input type="checkbox" ${t.enabled?'checked':''} onchange="editPathTarget('${esc(t.pattern)}',{enabled:this.checked})"> </label>
+      <input type="text" value="${t.label}" style="width:120px;background:#1e1e28;border:1px solid #444;color:#afc;border-radius:3px;padding:2px 6px;font-size:13px;font-weight:bold"
+        onchange="editPathTarget('${esc(t.pattern)}',{label:this.value})">
+      <div class="pattern" title="${t.pattern}">${t.pattern}</div>
+      ${i===cur?'<span style="color:#5cf;font-size:11px;font-weight:bold">ACTIVE</span>':''}
+      <button class="btn btn-rm" onclick="rmPathTarget('${esc(t.pattern)}')">X</button>
+    </div>`
+  ).join('')||'<div style="color:#666;padding:8px">No pathing targets. Add patterns above.</div>';
+}
+async function addPathTarget(){
+  const p=$('pathAddPattern').value.trim(),l=$('pathAddLabel').value.trim();
+  if(!p)return;
+  await fetch('/api/pathing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pattern:p,label:l||p,enabled:true})});
+  $('pathAddPattern').value='';$('pathAddLabel').value='';refreshPathing();
+}
+async function editPathTarget(pattern,changes){
+  await fetch('/api/pathing',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({pattern,...changes})});
+  refreshPathing();
+}
+async function rmPathTarget(pattern){
+  await fetch('/api/pathing?pattern='+encodeURIComponent(pattern),{method:'DELETE'});refreshPathing();
+}
+async function cyclePathTarget(){
+  await fetch('/api/pathing/cycle');refreshPathing();
 }
 
 // ── LANDMARKS ──

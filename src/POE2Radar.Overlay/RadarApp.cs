@@ -24,6 +24,7 @@ public sealed class RadarApp : IDisposable
     private readonly OverlayWindow _window;
     private readonly OverlayRenderer _renderer;
     private readonly WatchedEntities _watched;
+    private readonly PathingTargets _pathing;
     private readonly ApiServer _api;
     private readonly RadarSettings _radarSettings;
     private SettingsForm? _settingsForm;
@@ -82,7 +83,8 @@ public sealed class RadarApp : IDisposable
         var configDir = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "config");
         _radarSettings = RadarSettings.Load(Path.Combine(configDir, "radar_settings.json"));
         _watched = new WatchedEntities(Path.Combine(configDir, "watched_entities.json"));
-        _api = new ApiServer(() => _state, _watched, _radarSettings);
+        _pathing = new PathingTargets(Path.Combine(configDir, "pathing_targets.json"));
+        _api = new ApiServer(() => _state, _watched, _radarSettings, _pathing);
         try { _api.Start(); Console.WriteLine("API on http://localhost:7777 (/state, /entities)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
     }
@@ -170,6 +172,17 @@ public sealed class RadarApp : IDisposable
 
     private void HandleSettingsToggle()
     {
+        // F7 cycle pathing target
+        if (Down(0x76) && DateTime.UtcNow >= _nextToggleAt)
+        {
+            _nextToggleAt = DateTime.UtcNow.AddMilliseconds(300);
+            var next = _pathing.CycleNext();
+            if (next != null)
+            {
+                _pathPoints = null;
+                Console.WriteLine($"\nPath target: {next.Label} ({next.Pattern})");
+            }
+        }
         // F11 open web dashboard
         if (Down(0x7A) && DateTime.UtcNow >= _nextToggleAt)
         {
@@ -229,26 +242,33 @@ public sealed class RadarApp : IDisposable
 
     private void UpdatePath(NumVec2 playerGrid)
     {
-        var target = _radarSettings.PathTarget;
-        if (!_radarSettings.ShowPath || string.IsNullOrEmpty(target) || _terrain == null)
+        if (!_radarSettings.ShowPath || _terrain == null || _pathing.All.Count == 0)
         {
             _pathPoints = null;
             return;
         }
 
+        // Auto-find nearest entity matching any enabled pathing target
+        var entityInfo = _entities
+            .Select(e => (e.Metadata, Distance: (e.Grid - playerGrid).Length(), e.IsAlive))
+            .ToList();
+
+        var bestPattern = _pathing.FindNearestPattern(entityInfo!);
+        if (bestPattern == null) { _pathPoints = null; return; }
+
         var playerMoved = (playerGrid - _lastPathPlayerGrid).Length() > 5f;
-        var targetChanged = target != _lastPathTarget;
+        var targetChanged = bestPattern != _lastPathTarget;
         if (!playerMoved && !targetChanged && _pathPoints != null) return;
 
         _lastPathPlayerGrid = playerGrid;
-        _lastPathTarget = target;
+        _lastPathTarget = bestPattern;
 
         Poe2Live.EntityDot? closest = null;
         var closestDist = float.MaxValue;
         foreach (var e in _entities)
         {
             if (!e.IsAlive && e.HpMax > 0) continue;
-            if (!e.Metadata.Contains(target, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!e.Metadata.Contains(bestPattern, StringComparison.OrdinalIgnoreCase)) continue;
             var d = (e.Grid - playerGrid).Length();
             if (d < closestDist) { closestDist = d; closest = e; }
         }
@@ -256,12 +276,9 @@ public sealed class RadarApp : IDisposable
         if (closest == null) { _pathPoints = null; return; }
 
         var t = _terrain;
-        var px = (int)playerGrid.X;
-        var py = (int)playerGrid.Y;
-        var tx = (int)closest.Value.Grid.X;
-        var ty = (int)closest.Value.Grid.Y;
-
-        var result = AStarPathfinder.FindPath(t.Walkable, t.Width, t.Height, px, py, tx, ty);
+        var result = AStarPathfinder.FindPath(t.Walkable, t.Width, t.Height,
+            (int)playerGrid.X, (int)playerGrid.Y,
+            (int)closest.Value.Grid.X, (int)closest.Value.Grid.Y);
         _pathPoints = result != null ? AStarPathfinder.Simplify(result.Value.Points) : null;
     }
 
