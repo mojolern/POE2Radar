@@ -1,0 +1,9 @@
+{
+  "name": "poe2radar-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": { "poe2radar-mcp": "index.js" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest"
+  }
+}
