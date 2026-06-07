@@ -26,10 +26,13 @@ public sealed class RadarApp : IDisposable
     private readonly OverlayWindow _window;
     private readonly OverlayRenderer _renderer;
     private readonly WatchedEntities _watched;
+    private readonly HiddenEntities _hidden;
     private readonly PathingTargets _pathing;
     private readonly AutoRuleEngine _autoRules;
     private readonly ApiServer _api;
     private readonly RadarSettings _radarSettings;
+    private readonly EntityNameResolver _entityNames;
+    private readonly GameDataService _gameData;
     private SettingsForm? _settingsForm;
     private volatile RadarState _state = RadarState.Empty;
 
@@ -46,6 +49,7 @@ public sealed class RadarApp : IDisposable
     private List<(int X, int Y)>? _pathPoints;
     private NumVec2 _lastPathPlayerGrid;
     private string _lastPathTarget = "";
+    private string? _pathTargetName;
     private string? _manualPathPattern;
     private (int X, int Y)? _manualPathGridTarget;
     private readonly List<(float ScreenX, float ScreenY, string Metadata)> _entityScreenPos = new();
@@ -64,6 +68,9 @@ public sealed class RadarApp : IDisposable
     private float _hpPct = 100f, _manaPct = 100f;
     private string _flaskNote = "";
     private string _areaCode = "", _charName = "";
+    private string? _areaName;
+    private int _areaAct;
+    private bool _isTown;
     private int _charLevel;
     private float[]? _cameraMatrix;
     private bool _overlayVisible = true;
@@ -94,9 +101,12 @@ public sealed class RadarApp : IDisposable
         var configDir = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "config");
         _radarSettings = RadarSettings.Load(Path.Combine(configDir, "radar_settings.json"));
         _watched = new WatchedEntities(Path.Combine(configDir, "watched_entities.json"));
+        _hidden = new HiddenEntities(Path.Combine(configDir, "hidden_entities.json"));
         _pathing = new PathingTargets(Path.Combine(configDir, "pathing_targets.json"));
         _autoRules = new AutoRuleEngine(Path.Combine(configDir, "auto_rules.json"));
-        _api = new ApiServer(() => _state, _watched, _radarSettings, _pathing, _autoRules);
+        _entityNames = new EntityNameResolver(Path.Combine(configDir, "entity_names.json"));
+        _gameData = new GameDataService(configDir);
+        _api = new ApiServer(() => _state, _watched, _hidden, _radarSettings, _pathing, _autoRules, _entityNames, _gameData);
         try { _api.Start(); Console.WriteLine("API on http://localhost:7777 (/state, /entities)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
     }
@@ -138,6 +148,10 @@ public sealed class RadarApp : IDisposable
             _exploration.Update(player.X, player.Y, areaInstance);
             map = _live.ReadMap(inGameState, areaInstance);
             _areaCode = _live.AreaCode(areaInstance);
+            var area = _gameData.GetArea(_areaCode);
+            _areaName = area?.Name;
+            _areaAct = area?.Act ?? 0;
+            _isTown = area?.Town ?? false;
             _charName = _live.PlayerName(localPlayer);
             _charLevel = _live.PlayerLevel(localPlayer);
             _cameraMatrix = _live.CameraMatrix(inGameState);
@@ -155,7 +169,8 @@ public sealed class RadarApp : IDisposable
         }
 
         _state = new RadarState(inGame, _areaHash, areaLevel, map.IsVisible, map.Zoom, player, _entities, _landmarks,
-            _hpPct, _manaPct, _autoFlask, _flaskNote, _areaCode, _charName, _charLevel);
+            _hpPct, _manaPct, _autoFlask, _flaskNote, _areaCode, _charName, _charLevel,
+            _areaName, _areaAct, _isTown, _gameData.GetArea(_areaCode)?.Waypoint ?? false);
 
         var ctx = new RenderContext(
             InGame: inGame,
@@ -186,7 +201,17 @@ public sealed class RadarApp : IDisposable
             LandmarkScreenPositions: _landmarkScreenPos,
             Exploration: _exploration,
             InspectedName: _inspectedEntity,
-            InspectedMeta: _inspectedMeta);
+            InspectedMeta: _inspectedMeta,
+            PathTargetName: _pathTargetName,
+            EntityNames: _entityNames,
+            AreaName: _areaName,
+            AreaAct: _areaAct,
+            IsTown: _isTown,
+            CharName: _charName,
+            MapPins: _gameData.GetPins(_areaCode),
+            GameData: _gameData,
+            GameMinimap: _live.GameMinimap,
+            Hidden: _hidden);
         _renderer.Render(ctx);
     }
 
@@ -200,6 +225,7 @@ public sealed class RadarApp : IDisposable
             _manualPathGridTarget = null;
             _pathPoints = null;
             _lastPathTarget = "";
+            _pathTargetName = null;
             _lastPathPlayerGrid = NumVec2.Zero;
             Console.WriteLine("\nPath: back to auto-nearest");
         }
@@ -213,6 +239,7 @@ public sealed class RadarApp : IDisposable
                 _manualPathGridTarget = null;
                 _pathPoints = null;
                 _lastPathTarget = "";
+                _pathTargetName = null;
                 _lastPathPlayerGrid = NumVec2.Zero;
                 Console.WriteLine($"\nPath target: {next.Label} ({next.Pattern})");
             }
@@ -368,6 +395,7 @@ public sealed class RadarApp : IDisposable
             _manualPathGridTarget = ((int)bestLmGx, (int)bestLmGy);
             _pathPoints = null;
             _lastPathTarget = "";
+            _pathTargetName = bestLandmark;
             _lastPathPlayerGrid = NumVec2.Zero;
             Console.WriteLine($"\nAlt+click nav to landmark: {bestLandmark} grid=({(int)bestLmGx},{(int)bestLmGy})");
             return;
@@ -391,6 +419,7 @@ public sealed class RadarApp : IDisposable
             _manualPathGridTarget = null;
             _pathPoints = null;
             _lastPathTarget = "";
+            _pathTargetName = shortName;
             _lastPathPlayerGrid = NumVec2.Zero;
             Console.WriteLine($"\nAlt+click nav: {shortName}");
         }
@@ -401,6 +430,7 @@ public sealed class RadarApp : IDisposable
         if (!_radarSettings.ShowPath || _terrain == null)
         {
             _pathPoints = null;
+            _pathTargetName = null;
             return;
         }
 
@@ -413,6 +443,7 @@ public sealed class RadarApp : IDisposable
             destX = gridTarget.X;
             destY = gridTarget.Y;
             cacheKey = $"grid:{destX},{destY}";
+            _pathTargetName ??= "Custom waypoint";
         }
         else
         {
@@ -420,14 +451,16 @@ public sealed class RadarApp : IDisposable
 
             if (targetPattern == null)
             {
-                if (_pathing.All.Count == 0) { _pathPoints = null; return; }
+                if (_pathing.All.Count == 0) { _pathPoints = null; _pathTargetName = null; return; }
                 var entityInfo = _entities
                     .Select(e => (e.Metadata, Distance: (e.Grid - playerGrid).Length(), e.IsAlive))
                     .ToList();
                 targetPattern = _pathing.FindNearestPattern(entityInfo!);
             }
 
-            if (targetPattern == null) { _pathPoints = null; return; }
+            if (targetPattern == null) { _pathPoints = null; _pathTargetName = null; return; }
+            _pathTargetName = _pathing.All.FirstOrDefault(e =>
+                string.Equals(e.Pattern, targetPattern, StringComparison.OrdinalIgnoreCase))?.Label ?? targetPattern;
 
             Poe2Live.EntityDot? closest = null;
             var closestDist = float.MaxValue;
@@ -442,7 +475,7 @@ public sealed class RadarApp : IDisposable
             if (closest == null)
             {
                 if (_manualPathPattern != null) return; // keep last path visible
-                _pathPoints = null; return;
+                _pathPoints = null; _pathTargetName = null; return;
             }
             destX = (int)closest.Value.Grid.X;
             destY = (int)closest.Value.Grid.Y;

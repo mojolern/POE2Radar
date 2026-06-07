@@ -12,22 +12,37 @@ public sealed class ApiServer : IDisposable
     private readonly HttpListener _listener = new();
     private readonly Func<RadarState> _state;
     private readonly WatchedEntities _watched;
+    private readonly HiddenEntities _hidden;
     private readonly PathingTargets _pathing;
     private readonly AutoRuleEngine _autoRules;
     private readonly RadarSettings _settings;
+    private readonly EntityNameResolver _entityNames;
+    private readonly GameDataService _gameData;
     private volatile bool _running;
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     public WatchedEntities Watched => _watched;
 
-    public ApiServer(Func<RadarState> state, WatchedEntities watched, RadarSettings settings, PathingTargets pathing, AutoRuleEngine autoRules, int port = 7777)
+    public ApiServer(
+        Func<RadarState> state,
+        WatchedEntities watched,
+        HiddenEntities hidden,
+        RadarSettings settings,
+        PathingTargets pathing,
+        AutoRuleEngine autoRules,
+        EntityNameResolver entityNames,
+        GameDataService gameData,
+        int port = 7777)
     {
         _state = state;
         _watched = watched;
+        _hidden = hidden;
         _pathing = pathing;
         _autoRules = autoRules;
         _settings = settings;
+        _entityNames = entityNames;
+        _gameData = gameData;
         _listener.Prefixes.Add($"http://localhost:{port}/");
     }
 
@@ -73,9 +88,10 @@ public sealed class ApiServer : IDisposable
                 WriteJson(ctx, new
                 {
                     s.InGame, areaCode = s.AreaCode, areaHash = s.AreaHash, areaLevel = s.AreaLevel,
+                    areaName = s.AreaName, act = s.Act, isTown = s.IsTown, hasWaypoint = s.HasWaypoint,
                     mapVisible = s.MapVisible, zoom = s.Zoom,
                     hpPct = s.HpPct, manaPct = s.ManaPct, autoFlask = s.AutoFlask, flask = s.FlaskNote,
-                    player = new { x = s.Player.X, y = s.Player.Y },
+                    player = new { x = s.Player.X, y = s.Player.Y, name = s.CharName, level = s.CharLevel },
                     entityCount = s.Entities.Count, counts,
                 });
                 break;
@@ -108,10 +124,13 @@ public sealed class ApiServer : IDisposable
 
                 var list = q2.OrderBy(e => Dist(e.Grid, s.Player)).Take(limit).Select(e => new
                 {
+                    addr = $"0x{e.Address.ToInt64():X}",
                     id = e.Id, category = e.Category.ToString(), metadata = e.Metadata,
+                    name = _entityNames.ResolveOrShorten(e.Metadata),
                     poi = e.Poi, friendly = e.IsFriendly, rarity = e.Rarity.ToString(),
                     x = e.Grid.X, y = e.Grid.Y, hpCur = e.HpCur, hpMax = e.HpMax,
                     alive = e.IsAlive, dist = (int)Dist(e.Grid, s.Player),
+                    boss = e.IsBoss, league = e.League.ToString(), locked = e.IsLocked, large = e.IsLarge,
                     watched = _watched.IsWatched(e.Metadata),
                 });
                 WriteJson(ctx, list);
@@ -159,6 +178,36 @@ public sealed class ApiServer : IDisposable
                 break;
             }
 
+            case "/api/hidden":
+            {
+                if (method == "GET")
+                {
+                    WriteJson(ctx, _hidden.All.Order(StringComparer.OrdinalIgnoreCase).ToArray());
+                }
+                else if (method == "POST")
+                {
+                    var body = ReadBody(ctx);
+                    var data = JsonSerializer.Deserialize<Dictionary<string, string>>(body, Json);
+                    if (data != null && data.TryGetValue("pattern", out var pattern))
+                    {
+                        _hidden.Add(pattern);
+                        WriteJson(ctx, new { ok = true });
+                    }
+                    else WriteJson(ctx, new { error = "missing pattern" }, 400);
+                }
+                else if (method == "DELETE")
+                {
+                    var pattern = q["pattern"];
+                    if (!string.IsNullOrEmpty(pattern))
+                    {
+                        _hidden.Remove(pattern);
+                        WriteJson(ctx, new { ok = true });
+                    }
+                    else WriteJson(ctx, new { error = "missing pattern" }, 400);
+                }
+                break;
+            }
+
             case "/api/settings":
             {
                 if (method == "GET")
@@ -170,6 +219,17 @@ public sealed class ApiServer : IDisposable
                     if (patch != null) ApplySettings(patch);
                     WriteJson(ctx, _settings);
                 }
+                break;
+            }
+
+            case "/api/settings/reset":
+            {
+                if (method == "POST")
+                {
+                    _settings.ResetToDefaults();
+                    WriteJson(ctx, new { ok = true });
+                }
+                else WriteJson(ctx, new { error = "method not allowed" }, 405);
                 break;
             }
 
@@ -293,6 +353,44 @@ public sealed class ApiServer : IDisposable
                 break;
             }
 
+            case "/api/gamedata/areas":
+            {
+                WriteJson(ctx, _gameData.SearchAreas(q["search"]).Select(a => new
+                {
+                    code = a.Code, name = a.Name, act = a.Act, level = a.Level, town = a.Town, waypoint = a.Waypoint,
+                }));
+                break;
+            }
+
+            case "/api/gamedata/buffs":
+            {
+                _ = int.TryParse(q["limit"], out var limit);
+                WriteJson(ctx, _gameData.SearchBuffs(q["search"], limit).Select(b => new
+                {
+                    id = b.Id, name = b.Name, description = b.Description,
+                }));
+                break;
+            }
+
+            case "/api/gamedata/pins":
+            {
+                WriteJson(ctx, new { area = s.AreaCode, pins = _gameData.GetPins(s.AreaCode) });
+                break;
+            }
+
+            case "/api/inspect/components":
+            {
+                WriteJson(ctx, Array.Empty<object>());
+                break;
+            }
+
+            case "/api/inspect/schema":
+            case "/api/inspect":
+            {
+                WriteJson(ctx, new { error = "inspector not loaded in this source reconstruction" }, 404);
+                break;
+            }
+
             default:
                 WriteJson(ctx, new { error = "not found", path }, 404);
                 break;
@@ -381,7 +479,8 @@ public sealed record RadarState(
     IReadOnlyList<Poe2Live.EntityDot> Entities,
     IReadOnlyList<Poe2Live.Landmark> Landmarks,
     float HpPct, float ManaPct, bool AutoFlask, string FlaskNote,
-    string AreaCode, string CharName, int CharLevel)
+    string AreaCode, string CharName, int CharLevel,
+    string? AreaName = null, int Act = 0, bool IsTown = false, bool HasWaypoint = false)
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,
