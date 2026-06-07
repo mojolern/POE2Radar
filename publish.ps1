@@ -14,6 +14,10 @@ dotnet publish "$root/src/POE2Radar.Overlay/POE2Radar.Overlay.csproj" `
     -o "$root/publish"
 
 Copy-Item "$root/README.md", "$root/LICENSE" "$root/publish/" -Force
+if (Test-Path "$root/config") {
+    New-Item -ItemType Directory -Force "$root/publish/config" | Out-Null
+    Copy-Item "$root/config/*" "$root/publish/config/" -Force
+}
 $zip = "$root/POE2Radar-$Version-win-x64.zip"
 Compress-Archive -Path "$root/publish/*" -DestinationPath $zip -Force
 Write-Host "Built: $zip"

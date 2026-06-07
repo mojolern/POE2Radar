@@ -58,6 +58,20 @@ tr.watched{background:#2a3a2a}
 .section h3{font-size:13px;color:#78b4ff;margin-bottom:8px}
 .saved{color:#5f5;font-size:12px;opacity:0;transition:opacity 0.3s}
 .saved.show{opacity:1}
+.panel.panel-with-rail.active{display:grid;grid-template-columns:minmax(0,1fr) 116px;gap:12px;align-items:start}
+.panel-main{min-width:0}
+.panel-title{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.action-rail{position:sticky;top:12px;display:flex;flex-direction:column;gap:6px;align-items:stretch;background:#202838;border:1px solid #38445f;border-radius:6px;padding:8px;z-index:2}
+.action-rail .btn{width:100%;padding-left:8px;padding-right:8px}
+.action-rail .saved{text-align:center;min-height:16px}
+.mechanic-row{display:grid;grid-template-columns:90px 64px 94px 52px 110px 72px 1fr;gap:8px;align-items:center;margin-bottom:6px}
+.mechanic-row input[type=text],.mechanic-row select{background:#1e1e28;border:1px solid #444;color:#fff;padding:4px 6px;border-radius:4px;font-size:12px;min-width:0}
+.mechanic-match{font-family:monospace;font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:760px){
+  .panel.panel-with-rail.active{display:block}
+  .action-rail{position:sticky;bottom:8px;top:auto;flex-direction:row;flex-wrap:wrap;margin-top:10px}
+  .action-rail .btn{width:auto}
+}
 </style></head><body>
 <h1>Radar Dashboard</h1>
 <div class="status" id="status">Connecting...</div>
@@ -125,12 +139,21 @@ tr.watched{background:#2a3a2a}
 </div>
 
 <!-- RADAR SETTINGS -->
-<div class="panel" id="tab-settings">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-    <h2 style="margin:0">Radar Settings</h2>
-    <div><span class="saved" id="savedMsg">Saved!</span> <button class="btn btn-save" onclick="saveSettings()">Save</button> <button class="btn" style="background:#2a3a5a;color:#8cf" onclick="exportSettings()">Export</button> <button class="btn" style="background:#2a5a3a;color:#8f8" onclick="$('importFile').click()">Import</button><input type="file" id="importFile" accept=".json" style="display:none" onchange="importSettings(event)"> <button class="btn" style="background:#5a2a2a;color:#f88" onclick="resetSettings()">Reset</button></div>
+<div class="panel panel-with-rail" id="tab-settings">
+  <div class="panel-main">
+    <div class="panel-title">
+      <h2 style="margin:0">Radar Settings</h2>
+    </div>
+    <div id="settingsBody"></div>
   </div>
-  <div id="settingsBody"></div>
+  <div class="action-rail">
+    <span class="saved" id="savedMsg">Saved!</span>
+    <button class="btn btn-save" onclick="saveSettings()">Save</button>
+    <button class="btn" style="background:#2a3a5a;color:#8cf" onclick="exportSettings()">Export</button>
+    <button class="btn" style="background:#2a5a3a;color:#8f8" onclick="$('settingsImportFile').click()">Import</button>
+    <input type="file" id="settingsImportFile" accept=".json" style="display:none" onchange="importSettings(event)">
+    <button class="btn" style="background:#5a2a2a;color:#f88" onclick="resetSettings()">Reset</button>
+  </div>
 </div>
 
 <!-- AUTO-SKILLS -->
@@ -189,12 +212,17 @@ tr.watched{background:#2a3a2a}
 </div>
 
 <!-- MINIMAP -->
-<div class="panel" id="tab-minimap">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-    <h2 style="margin:0">Minimap Settings</h2>
-    <div><span class="saved" id="mmSavedMsg">Saved!</span> <button class="btn btn-save" onclick="saveSettings();$('mmSavedMsg').classList.add('show');setTimeout(()=>$('mmSavedMsg').classList.remove('show'),1500)">Save</button></div>
+<div class="panel panel-with-rail" id="tab-minimap">
+  <div class="panel-main">
+    <div class="panel-title">
+      <h2 style="margin:0">Minimap Settings</h2>
+    </div>
+    <div id="minimapSettingsBody"></div>
   </div>
-  <div id="minimapSettingsBody"></div>
+  <div class="action-rail">
+    <span class="saved" id="mmSavedMsg">Saved!</span>
+    <button class="btn btn-save" onclick="saveSettings();$('mmSavedMsg').classList.add('show');setTimeout(()=>$('mmSavedMsg').classList.remove('show'),1500)">Save</button>
+  </div>
 </div>
 
 <!-- LANDMARKS -->
@@ -206,13 +234,17 @@ tr.watched{background:#2a3a2a}
 </div>
 
 <!-- DEVTEST -->
-<div class="panel" id="tab-devtest">
+<div class="panel panel-with-rail" id="tab-devtest">
+  <div class="panel-main">
   <div style="background:#3a1a1a;border:1px solid #f44;border-radius:6px;padding:10px;margin-bottom:12px">
     <h2 style="margin:0;color:#f88">⚠ DevTest — Game Memory Writes</h2>
     <p style="color:#faa;font-size:12px;margin:6px 0 0">These write directly to game entity memory. <b>WILL LIKELY CRASH</b> — component byte field offsets need re-validation for the current game patch. The header delta between ComponentList pointers and setter function bases has not been resolved yet. Use at your own risk.</p>
   </div>
   <div id="devtestBody"></div>
-  <div style="margin-top:10px"><button class="btn btn-save" onclick="saveSettings()">Save</button></div>
+  </div>
+  <div class="action-rail">
+    <button class="btn btn-save" onclick="saveSettings()">Save</button>
+  </div>
 </div>
 
 <!-- GAME DATA -->
@@ -243,13 +275,15 @@ tr.watched{background:#2a3a2a}
 </div>
 
 <!-- KEYBINDS -->
-<div class="panel" id="tab-keybinds">
+<div class="panel panel-with-rail" id="tab-keybinds">
+  <div class="panel-main">
   <h2>Hotkey Bindings</h2>
   <p style="font-size:12px;color:#aaa;margin-bottom:10px">
     Click a key field and press any key to rebind. Click <b>Save</b> to persist. Changes take effect immediately after save.
   </p>
   <div id="keybindsBody"></div>
-  <div style="margin-top:10px">
+  </div>
+  <div class="action-rail">
     <button class="btn btn-save" onclick="saveKeybinds()">Save</button>
     <span class="saved" id="kbSavedMsg">Saved!</span>
   </div>
@@ -438,6 +472,9 @@ const settingsDef = [
     {key:'hideJunkEntities',label:'Hide Junk (attachments, effects, cosmetics)',type:'bool'},
     {key:'hideUntargetable',label:'Hide Untargetable Entities',type:'bool'},
     {key:'showDeadMonsters',label:'Show Dead Corpses (off = cleaner map)',type:'bool'},
+    {key:'showMechanicIcons',label:'Show Content/Mechanic Icons',type:'bool'},
+    {key:'hideDeadMechanicMonsters',label:'Hide Dead Content Monsters',type:'bool'},
+    {key:'showMechanicNonMonsterIcons',label:'Show Content Non-Monster/Effect Icons',type:'bool'},
     {key:'showNormalMonsters',label:'Show Normal (white) Monsters',type:'bool'},
     {key:'showNormalChests',label:'Show Normal Chests (not just Rare/Unique)',type:'bool'},
     {key:'showFriendlyEntities',label:'Show Friendly Monsters (minions, allies)',type:'bool'},
@@ -506,6 +543,7 @@ const settingsDef = [
     {key:'fogCellScale',label:'Fog Cell Size',type:'num',min:0.05,max:0.3,step:0.01},
   ]},
   {section:'Map Drawing',items:[
+    {key:'mapCenterOnPlayerScreen',label:'Compensate inventory/stash viewport shift',type:'bool'},
     {key:'mapCenterYShift',label:'Map Center Y Shift',type:'num',min:-100,max:100,step:1},
     {key:'playerBlipSize',label:'Player Blip Size (map)',type:'num',min:1,max:15,step:0.5},
 
@@ -570,9 +608,41 @@ async function loadSettings(){
     }
     html+=`</div></div>`;
   }
+  html+=renderMechanicStyles();
   $('settingsBody').innerHTML=html;
 }
 function setSetting(key,val){settings[key]=val;}
+const iconShapeOptions=['Circle','Square','Diamond','Triangle','TriangleDown','Star','Plus','Cross','Hexagon','Pentagon','Exclamation','Ring','Shield','Gem','Droplet','Heart','ArrowUp'];
+function renderMechanicStyles(){
+  const styles=settings.styles||(settings.styles={});
+  const mechanics=styles.mechanics||(styles.mechanics=[]);
+  if(!mechanics.length)return '';
+  const rows=mechanics.map((m,i)=>`
+    <div class="mechanic-row">
+      <label style="font-size:13px;color:#ccc"><input type="checkbox" ${m.enabled!==false?'checked':''} onchange="setMechanic(${i},'enabled',this.checked)"> ${m.name||('Rule '+(i+1))}</label>
+      <input type="color" value="${m.color||'#ffffff'}" onchange="setMechanic(${i},'color',this.value)" title="Color">
+      <select onchange="setMechanic(${i},'shape',this.value)" title="Shape">
+        ${iconShapeOptions.map(s=>`<option value="${s}" ${(m.shape||'Star')===s?'selected':''}>${s}</option>`).join('')}
+      </select>
+      <input type="number" min="1" max="30" step="0.5" value="${m.size??6}" onchange="setMechanic(${i},'size',parseFloat(this.value))" title="Size">
+      <label style="font-size:12px;color:#aaa">Opacity
+        <input type="range" min="0" max="1" step="0.05" value="${m.opacity??1}" oninput="setMechanic(${i},'opacity',parseFloat(this.value));this.nextElementSibling.textContent=this.value">
+        <span class="val">${m.opacity??1}</span>
+      </label>
+      <span style="font-size:11px;color:#666">matches</span>
+      <div class="mechanic-match" title="${(m.match||[]).join(', ')}">${(m.match||[]).join(', ')}</div>
+    </div>`).join('');
+  return `<div class="section"><h3>Mechanic Icon Styles</h3>
+    <p style="font-size:12px;color:#aaa;margin-bottom:8px">These rules style content icons such as Breach, Expedition, Ritual, Strongbox, Essence, and Shrine.</p>
+    ${rows}
+  </div>`;
+}
+function setMechanic(index,key,val){
+  settings.styles=settings.styles||{};
+  settings.styles.mechanics=settings.styles.mechanics||[];
+  settings.styles.mechanics[index]=settings.styles.mechanics[index]||{};
+  settings.styles.mechanics[index][key]=val;
+}
 async function saveSettings(){
   await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});
   $('savedMsg').classList.add('show');setTimeout(()=>$('savedMsg').classList.remove('show'),1500);
@@ -838,6 +908,7 @@ const minimapDef = [
     {key:'minimapSize',label:'Size (px)',type:'num',min:100,max:500,step:10},
     {key:'minimapScale',label:'Zoom',type:'num',min:0.1,max:2,step:0.05},
     {key:'minimapOpacity',label:'Opacity',type:'num',min:0.2,max:1,step:0.05},
+    {key:'minimapAutoAlignToGame',label:'Auto-align to game minimap',type:'bool'},
     {key:'minimapPosition',label:'Corner (topleft, topright, bottomleft, bottomright)',type:'text'},
     {key:'minimapOffsetX',label:'Offset X (px)',type:'num',min:-2000,max:2000,step:5},
     {key:'minimapOffsetY',label:'Offset Y (px)',type:'num',min:-2000,max:2000,step:5},

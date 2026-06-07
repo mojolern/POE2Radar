@@ -106,8 +106,27 @@ public sealed class RadarApp : IDisposable
         _autoRules = new AutoRuleEngine(Path.Combine(configDir, "auto_rules.json"));
         _entityNames = new EntityNameResolver(Path.Combine(configDir, "entity_names.json"));
         _gameData = new GameDataService(configDir);
-        _api = new ApiServer(() => _state, _watched, _hidden, _radarSettings, _pathing, _autoRules, _entityNames, _gameData);
-        try { _api.Start(); Console.WriteLine("API on http://localhost:7777 (/state, /entities)"); }
+        ComponentFieldReader? inspector = null;
+        var idaOffsetsPath = Path.Combine(configDir, "OtIdaOffsets.json");
+        if (File.Exists(idaOffsetsPath))
+        {
+            try
+            {
+                inspector = new ComponentFieldReader(idaOffsetsPath, _live, _reader);
+                Console.WriteLine($"Inspector loaded: {inspector.ComponentNames.Count} components from OtIdaOffsets.json");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Inspector disabled: {ex.Message}");
+            }
+        }
+        else
+        {
+            Console.WriteLine("Inspector disabled: config\\OtIdaOffsets.json not found");
+        }
+
+        _api = new ApiServer(() => _state, _watched, _hidden, _radarSettings, _pathing, _autoRules, inspector, _entityNames, _gameData);
+        try { _api.Start(); Console.WriteLine("API on http://localhost:7777 (/state, /entities, /api/inspect)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
     }
 
@@ -170,7 +189,9 @@ public sealed class RadarApp : IDisposable
 
         _state = new RadarState(inGame, _areaHash, areaLevel, map.IsVisible, map.Zoom, player, _entities, _landmarks,
             _hpPct, _manaPct, _autoFlask, _flaskNote, _areaCode, _charName, _charLevel,
-            _areaName, _areaAct, _isTown, _gameData.GetArea(_areaCode)?.Waypoint ?? false);
+            _areaName, _areaAct, _isTown, _gameData.GetArea(_areaCode)?.Waypoint ?? false,
+            map.ShiftX, map.ShiftY,
+            _live.GameMinimap.Available, _live.GameMinimap.ShiftX, _live.GameMinimap.ShiftY, _live.GameMinimap.Zoom);
 
         var ctx = new RenderContext(
             InGame: inGame,

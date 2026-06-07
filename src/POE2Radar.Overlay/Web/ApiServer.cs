@@ -1,5 +1,6 @@
 using System.Net;
 using System.Reflection;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using POE2Radar.Core.Game;
@@ -16,6 +17,7 @@ public sealed class ApiServer : IDisposable
     private readonly PathingTargets _pathing;
     private readonly AutoRuleEngine _autoRules;
     private readonly RadarSettings _settings;
+    private readonly ComponentFieldReader? _inspector;
     private readonly EntityNameResolver _entityNames;
     private readonly GameDataService _gameData;
     private volatile bool _running;
@@ -31,6 +33,7 @@ public sealed class ApiServer : IDisposable
         RadarSettings settings,
         PathingTargets pathing,
         AutoRuleEngine autoRules,
+        ComponentFieldReader? inspector,
         EntityNameResolver entityNames,
         GameDataService gameData,
         int port = 7777)
@@ -41,6 +44,7 @@ public sealed class ApiServer : IDisposable
         _pathing = pathing;
         _autoRules = autoRules;
         _settings = settings;
+        _inspector = inspector;
         _entityNames = entityNames;
         _gameData = gameData;
         _listener.Prefixes.Add($"http://localhost:{port}/");
@@ -90,6 +94,8 @@ public sealed class ApiServer : IDisposable
                     s.InGame, areaCode = s.AreaCode, areaHash = s.AreaHash, areaLevel = s.AreaLevel,
                     areaName = s.AreaName, act = s.Act, isTown = s.IsTown, hasWaypoint = s.HasWaypoint,
                     mapVisible = s.MapVisible, zoom = s.Zoom,
+                    map = new { visible = s.MapVisible, shiftX = s.MapShiftX, shiftY = s.MapShiftY, zoom = s.Zoom },
+                    minimap = new { available = s.GameMinimapAvailable, shiftX = s.GameMinimapShiftX, shiftY = s.GameMinimapShiftY, zoom = s.GameMinimapZoom },
                     hpPct = s.HpPct, manaPct = s.ManaPct, autoFlask = s.AutoFlask, flask = s.FlaskNote,
                     player = new { x = s.Player.X, y = s.Player.Y, name = s.CharName, level = s.CharLevel },
                     entityCount = s.Entities.Count, counts,
@@ -380,14 +386,19 @@ public sealed class ApiServer : IDisposable
 
             case "/api/inspect/components":
             {
-                WriteJson(ctx, Array.Empty<object>());
+                HandleInspectComponents(ctx);
                 break;
             }
 
             case "/api/inspect/schema":
+            {
+                HandleInspectSchema(ctx, q["component"]);
+                break;
+            }
+
             case "/api/inspect":
             {
-                WriteJson(ctx, new { error = "inspector not loaded in this source reconstruction" }, 404);
+                HandleInspectEntity(ctx, q["entity"], q["component"]);
                 break;
             }
 
@@ -395,6 +406,110 @@ public sealed class ApiServer : IDisposable
                 WriteJson(ctx, new { error = "not found", path }, 404);
                 break;
         }
+    }
+
+    private void HandleInspectComponents(HttpListenerContext ctx)
+    {
+        if (_inspector == null)
+        {
+            WriteJson(ctx, new { error = "inspector not loaded - place OtIdaOffsets.json in config/" }, 503);
+            return;
+        }
+
+        WriteJson(ctx, _inspector.Components.Select(c => new
+        {
+            name = c.Key,
+            fieldCount = c.Value.Fields.Count,
+            byteSetter = c.Value.ByteSetter,
+            intSetter = c.Value.IntSetter,
+            floatSetter = c.Value.FloatSetter,
+            anchor = c.Value.StringAnchor,
+        }));
+    }
+
+    private void HandleInspectSchema(HttpListenerContext ctx, string? componentName)
+    {
+        if (_inspector == null)
+        {
+            WriteJson(ctx, new { error = "inspector not loaded - place OtIdaOffsets.json in config/" }, 503);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(componentName))
+        {
+            WriteJson(ctx, _inspector.ComponentNames);
+            return;
+        }
+
+        if (!_inspector.Components.TryGetValue(componentName, out var cdef))
+        {
+            WriteJson(ctx, new { error = "unknown component" }, 404);
+            return;
+        }
+
+        WriteJson(ctx, new
+        {
+            name = cdef.Name,
+            byteSetter = cdef.ByteSetter,
+            intSetter = cdef.IntSetter,
+            floatSetter = cdef.FloatSetter,
+            anchor = cdef.StringAnchor,
+            notes = cdef.ComponentNotes,
+            fields = cdef.Fields.Select(f => new
+            {
+                name = f.Name,
+                offset = $"0x{f.Offset:X}",
+                type = f.Type,
+                verified = f.Verified,
+                notes = f.Notes,
+            }),
+        });
+    }
+
+    private void HandleInspectEntity(HttpListenerContext ctx, string? entityAddress, string? componentName)
+    {
+        if (_inspector == null)
+        {
+            WriteJson(ctx, new { error = "inspector not loaded - place OtIdaOffsets.json in config/" }, 503);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(entityAddress) || !TryParseAddress(entityAddress, out var entity))
+        {
+            WriteJson(ctx, new { error = "entity parameter required (hex address)" }, 400);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(componentName))
+        {
+            WriteJson(ctx, new
+            {
+                entity = $"0x{entity:X}",
+                component = componentName,
+                fields = _inspector.ReadComponent(entity, componentName),
+            });
+            return;
+        }
+
+        WriteJson(ctx, new
+        {
+            entity = $"0x{entity:X}",
+            components = _inspector.ReadAllComponents(entity),
+        });
+    }
+
+    private static bool TryParseAddress(string text, out nint address)
+    {
+        address = 0;
+        text = text.Trim();
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            text = text[2..];
+
+        if (!long.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var value))
+            return false;
+
+        address = (nint)value;
+        return true;
     }
 
     private void ApplySettings(Dictionary<string, JsonElement> patch)
@@ -414,6 +529,11 @@ public sealed class ApiServer : IDisposable
                     prop.SetValue(_settings, val.GetString());
                 else if (prop.PropertyType == typeof(int))
                     prop.SetValue(_settings, val.GetInt32());
+                else
+                {
+                    var parsed = JsonSerializer.Deserialize(val.GetRawText(), prop.PropertyType, Json);
+                    if (parsed != null) prop.SetValue(_settings, parsed);
+                }
             }
             catch { }
         }
@@ -480,7 +600,9 @@ public sealed record RadarState(
     IReadOnlyList<Poe2Live.Landmark> Landmarks,
     float HpPct, float ManaPct, bool AutoFlask, string FlaskNote,
     string AreaCode, string CharName, int CharLevel,
-    string? AreaName = null, int Act = 0, bool IsTown = false, bool HasWaypoint = false)
+    string? AreaName = null, int Act = 0, bool IsTown = false, bool HasWaypoint = false,
+    float MapShiftX = 0, float MapShiftY = 0,
+    bool GameMinimapAvailable = false, float GameMinimapShiftX = 0, float GameMinimapShiftY = 0, float GameMinimapZoom = 0)
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,

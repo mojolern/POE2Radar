@@ -594,8 +594,11 @@ public sealed class Poe2Live
     }
 
     private readonly List<nint> _mapEls = new();
+    private readonly Dictionary<nint, long> _mapChildCounts = new();
     private readonly HashSet<nint> _everHidden = new();  // elements observed with visible-bit clear
     private readonly HashSet<nint> _everVisible = new(); // elements observed with visible-bit set
+    private nint _largeMapEl;
+    private nint _miniMapEl;
     private nint _mapCacheKey = -1;
 
     /// <summary>
@@ -614,26 +617,50 @@ public sealed class Poe2Live
         {
             _mapCacheKey = areaInstance;
             _mapEls.Clear();
+            _mapChildCounts.Clear();
             _everHidden.Clear();
             _everVisible.Clear();
+            _largeMapEl = 0;
+            _miniMapEl = 0;
+            _lastMinimap = default;
             DiscoverMapElements(inGameState);
         }
+
+        if (TryReadDirectMap(inGameState, out var directMap))
+            return directMap;
 
         var visibleCount = 0;
         var any = false; MapUi anyUi = default;
         var sawToggler = false; var togglerVisible = false; var haveTogglerUi = false; MapUi togglerUi = default;
+        var bestLargeScore = float.MinValue; MapUi bestLargeUi = default; var haveBestLarge = false;
         foreach (var el in _mapEls)
         {
             if (!TryReadMapElement(el, out var vis, out var sx, out var sy, out var zoom)) continue;
+            var ui = new MapUi(vis, sx, sy, zoom);
             if (vis) { _everVisible.Add(el); visibleCount++; } else _everHidden.Add(el);
-            if (!any) { any = true; anyUi = new MapUi(vis, sx, sy, zoom); }
+            if (!any) { any = true; anyUi = ui; }
+
+            if (vis)
+            {
+                var score = LargeMapScore(el, ui);
+                if (score > bestLargeScore)
+                {
+                    bestLargeScore = score;
+                    bestLargeUi = ui;
+                    haveBestLarge = true;
+                }
+            }
 
             // A genuine toggler has been seen in BOTH states; permanently-on/off elements never qualify.
             if (_everVisible.Contains(el) && _everHidden.Contains(el))
             {
                 sawToggler = true;
                 if (vis) togglerVisible = true;
-                if (vis || !haveTogglerUi) { togglerUi = new MapUi(vis, sx, sy, zoom); haveTogglerUi = true; }
+                if (!haveTogglerUi || (vis && LargeMapScore(el, ui) > LargeMapScore(togglerUi)))
+                {
+                    togglerUi = ui;
+                    haveTogglerUi = true;
+                }
             }
             else if (!_everHidden.Contains(el))
             {
@@ -645,7 +672,65 @@ public sealed class Poe2Live
         if (sawToggler)
             return new MapUi(togglerVisible, togglerUi.ShiftX, togglerUi.ShiftY, togglerUi.Zoom);
 
-        return new MapUi(visibleCount >= 2, anyUi.ShiftX, anyUi.ShiftY, anyUi.Zoom);
+        if (visibleCount >= 2 && haveBestLarge)
+            return new MapUi(true, bestLargeUi.ShiftX, bestLargeUi.ShiftY, bestLargeUi.Zoom);
+
+        return new MapUi(false, anyUi.ShiftX, anyUi.ShiftY, anyUi.Zoom);
+    }
+
+    private bool TryReadDirectMap(nint inGameState, out MapUi map)
+    {
+        map = default;
+
+        if ((_largeMapEl == 0 || _miniMapEl == 0) &&
+            !TryResolveDirectMapElements(inGameState, out _largeMapEl, out _miniMapEl))
+            return false;
+
+        if (_miniMapEl != 0 && TryReadMapElement(_miniMapEl, out _, out var msx, out var msy, out var mz))
+            _lastMinimap = new MinimapUi(true, msx, msy, mz);
+
+        if (_largeMapEl == 0 || !TryReadMapElement(_largeMapEl, out var visible, out var sx, out var sy, out var zoom))
+        {
+            _largeMapEl = 0;
+            _miniMapEl = 0;
+            return false;
+        }
+
+        map = new MapUi(visible, sx, sy, zoom);
+        return true;
+    }
+
+    private bool TryResolveDirectMapElements(nint inGameState, out nint largeMap, out nint miniMap)
+    {
+        largeMap = 0;
+        miniMap = 0;
+
+        var uiRoot = Ptr(inGameState + Poe2.InGameState.UiRoot);
+        var rootStruct = Ptr(inGameState + Poe2.InGameState.UiRootStructPtr);
+        Span<nint> bases =
+        [
+            uiRoot,
+            Ptr(uiRoot + Poe2.UiRootStruct.GameUiPtr),
+            rootStruct,
+            Ptr(rootStruct + Poe2.UiRootStruct.GameUiPtr),
+        ];
+
+        foreach (var b in bases)
+        {
+            if (b == 0) continue;
+            var parent = Ptr(b + Poe2.ImportantUi.MapParentPtr);
+            if (parent == 0) continue;
+
+            var large = Ptr(parent + Poe2.MapParent.LargeMapPtr);
+            var mini = Ptr(parent + Poe2.MapParent.MiniMapPtr);
+            if (!LooksLikeMapElement(large) || !LooksLikeMapElement(mini)) continue;
+
+            largeMap = large;
+            miniMap = mini;
+            return true;
+        }
+
+        return false;
     }
 
     private void DiscoverMapElements(nint inGameState)
@@ -660,12 +745,16 @@ public sealed class Poe2Live
             var el = queue.Dequeue();
             if (el == 0 || !visited.Add(el)) continue;
 
+            long childCount = 0;
             var first = Ptr(el + Poe2.UiElement.Children);
             if (first != 0 && _reader.TryReadStruct<nint>(el + Poe2.UiElement.Children + 8, out var lastC))
             {
                 var n = ((long)lastC - (long)first) / 8;
                 if (n is > 0 and <= 8192)
+                {
+                    childCount = n;
                     for (long k = 0; k < n; k++) queue.Enqueue(Ptr(first + (nint)(k * 8)));
+                }
             }
 
             if (_reader.TryReadBytes(el, body) < body.Length) continue;
@@ -674,19 +763,38 @@ public sealed class Poe2Live
             var zoom = BitConverter.ToSingle(body, Poe2.MapUiElement.Zoom);
             if (zoom is <= 0.05f or >= 8f) continue;
             _mapEls.Add(el);
+            _mapChildCounts[el] = childCount;
         }
     }
 
     private bool TryReadMapElement(nint el, out bool visible, out float shiftX, out float shiftY, out float zoom)
     {
         visible = false; shiftX = shiftY = zoom = 0;
-        if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.DefaultShift + 4, out var dsy) || dsy != -20f) return false;
+        if (!LooksLikeMapElement(el)) return false;
         _reader.TryReadStruct<float>(el + Poe2.MapUiElement.Shift, out shiftX);
         _reader.TryReadStruct<float>(el + Poe2.MapUiElement.Shift + 4, out shiftY);
         _reader.TryReadStruct<float>(el + Poe2.MapUiElement.Zoom, out zoom);
+        if (MathF.Abs(shiftX) > 10000f || MathF.Abs(shiftY) > 10000f) return false;
         visible = IsVisible(el);
         return true;
     }
+
+    private bool LooksLikeMapElement(nint el)
+    {
+        if (el == 0) return false;
+        if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.DefaultShift, out var dsx)) return false;
+        if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.DefaultShift + 4, out var dsy)) return false;
+        if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.Zoom, out var zoom)) return false;
+        return MathF.Abs(dsx) < 0.01f && MathF.Abs(dsy + 20f) < 0.01f && zoom is > 0.05f and < 8f;
+    }
+
+    private float LargeMapScore(nint el, MapUi ui)
+    {
+        _mapChildCounts.TryGetValue(el, out var childCount);
+        return MathF.Abs(ui.ShiftX) * 4f + MathF.Abs(ui.ShiftY) + Math.Min(childCount, 1000) * 0.01f;
+    }
+
+    private static float LargeMapScore(MapUi ui) => MathF.Abs(ui.ShiftX) * 4f + MathF.Abs(ui.ShiftY);
 
     /// <summary>Element's own visibility bit (0x0B of Flags). Note: full visibility is hierarchical.</summary>
     public bool IsVisible(nint element)

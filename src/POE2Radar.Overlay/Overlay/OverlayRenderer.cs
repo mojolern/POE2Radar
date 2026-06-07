@@ -71,6 +71,7 @@ public sealed class OverlayRenderer : IDisposable
     private IDWriteTextFormat? _tfLandmark, _tfTransition, _tfChest, _tfStatus;
     private float _lastLmFs, _lastTrFs, _lastChFs, _lastStatusFs;
     private string _lastFont = "";
+    private float _mapViewportCorrectionX;
     private bool _ready;
 
     public OverlayRenderer(OverlayWindow window) { _window = window; }
@@ -555,10 +556,14 @@ public sealed class OverlayRenderer : IDisposable
 
     private void DrawMap(ID2D1RenderTarget rt, RenderContext ctx)
     {
-        // MapCenter = window center + DefaultShift(0,-20) + Shift + manual offset.
+        var baseCenter = new NumVec2(
+            ctx.WindowWidth * 0.5f + StableMapViewportCorrectionX(ctx),
+            ctx.WindowHeight * 0.5f);
+
+        // MapCenter = stable UI center + DefaultShift(0,-20) + Shift + manual offset.
         var center = new NumVec2(
-            ctx.WindowWidth  * 0.5f + ctx.Map.ShiftX + ctx.OffsetX,
-            ctx.WindowHeight * 0.5f + ctx.Map.ShiftY + (ctx.Radar?.MapCenterYShift ?? -20f) + ctx.OffsetY);
+            baseCenter.X + ctx.Map.ShiftX + ctx.OffsetX,
+            baseCenter.Y + ctx.Map.ShiftY + (ctx.Radar?.MapCenterYShift ?? -20f) + ctx.OffsetY);
         var scale = ctx.Map.Zoom * (ctx.WindowHeight / 677f) * ctx.ScaleMul;
         var player = ctx.PlayerGrid;
 
@@ -635,8 +640,18 @@ public sealed class OverlayRenderer : IDisposable
             var styles = rs?.Styles;
             string shapeName; float r; ID2D1SolidColorBrush brush;
 
-            // Check mechanic overrides first (metadata-matched, first enabled match wins)
+            // Mechanic overrides are visual styling only; they must still obey monster death/clutter filters.
             var mechMatch = styles != null ? MatchMechanic(styles, e.Metadata) : null;
+            if (mechMatch != null)
+            {
+                if (rs?.ShowMechanicIcons == false)
+                    mechMatch = null;
+                else if (e.Category == Poe2Live.EntityCategory.Monster && !e.IsAlive && rs?.HideDeadMechanicMonsters != false)
+                    continue;
+                else if (e.Category != Poe2Live.EntityCategory.Monster && rs?.ShowMechanicNonMonsterIcons != true)
+                    mechMatch = null;
+            }
+
             if (mechMatch != null)
             {
                 SetStyleBrush(mechMatch.Color, mechMatch.Opacity);
@@ -653,7 +668,7 @@ public sealed class OverlayRenderer : IDisposable
                         (shapeName, r, brush) = (bs?.Shape ?? "Star", rs?.BossDotSize ?? 8.0f, _bStyle!);
                         break;
                     }
-                    if (e.IsLeagueMechanic)
+                    if (e.IsLeagueMechanic && rs?.ShowMechanicIcons != false)
                     {
                         var lb = GetLeagueBrush(rt, e.League);
                         var ls = e.Rarity switch
@@ -972,12 +987,23 @@ public sealed class OverlayRenderer : IDisposable
         var player = ctx.PlayerGrid;
 
         float mx, my;
-        switch (rs.MinimapPosition)
+        if (rs.MinimapAutoAlignToGame && ctx.GameMinimap.Available)
         {
-            case "topleft":     mx = 10; my = 75; break;
-            case "topright":    mx = ctx.WindowWidth - sz - 10; my = 75; break;
-            case "bottomleft":  mx = 10; my = ctx.WindowHeight - sz - 10; break;
-            default:            mx = ctx.WindowWidth - sz - 10; my = ctx.WindowHeight - sz - 10; break;
+            var gameCenter = new NumVec2(
+                ctx.WindowWidth * 0.5f + ctx.GameMinimap.ShiftX,
+                ctx.WindowHeight * 0.5f + ctx.GameMinimap.ShiftY + (ctx.Radar?.MapCenterYShift ?? -20f));
+            mx = gameCenter.X - sz / 2f;
+            my = gameCenter.Y - sz / 2f;
+        }
+        else
+        {
+            switch (rs.MinimapPosition)
+            {
+                case "topleft":     mx = 10; my = 75; break;
+                case "topright":    mx = ctx.WindowWidth - sz - 10; my = 75; break;
+                case "bottomleft":  mx = 10; my = ctx.WindowHeight - sz - 10; break;
+                default:            mx = ctx.WindowWidth - sz - 10; my = ctx.WindowHeight - sz - 10; break;
+            }
         }
         mx += rs.MinimapOffsetX;
         my += rs.MinimapOffsetY;
@@ -1141,6 +1167,47 @@ public sealed class OverlayRenderer : IDisposable
         var d = cell - player;
         var md = MapProjection.GridDeltaToMapDelta(new GameVec2 { X = d.X, Y = d.Y }, scale);
         return new NumVec2(center.X + md.X, center.Y + md.Y);
+    }
+
+    private static bool TryPlayerScreenPoint(RenderContext ctx, out NumVec2 screen)
+    {
+        screen = default;
+        if (ctx.CameraMatrix is not { Length: >= 16 } m) return false;
+
+        var player = ctx.Entities.FirstOrDefault(e => e.Category == Poe2Live.EntityCategory.Player);
+        if (player.Metadata == null) return false;
+
+        var w = player.World;
+        var cw = w.X * m[3] + w.Y * m[7] + w.Z * m[11] + m[15];
+        if (cw <= 0.001f) return false;
+
+        var cx = w.X * m[0] + w.Y * m[4] + w.Z * m[8] + m[12];
+        var cy = w.X * m[1] + w.Y * m[5] + w.Z * m[9] + m[13];
+        var sx = (cx / cw / 2f + 0.5f) * ctx.WindowWidth;
+        var sy = (0.5f - cy / cw / 2f) * ctx.WindowHeight;
+        if (sx < -200 || sx > ctx.WindowWidth + 200 || sy < -200 || sy > ctx.WindowHeight + 200)
+            return false;
+
+        screen = new NumVec2(sx, sy);
+        return true;
+    }
+
+    private float StableMapViewportCorrectionX(RenderContext ctx)
+    {
+        if (ctx.Radar?.MapCenterOnPlayerScreen == false || !TryPlayerScreenPoint(ctx, out var playerScreen))
+        {
+            _mapViewportCorrectionX = 0f;
+            return 0f;
+        }
+
+        var raw = playerScreen.X - ctx.WindowWidth * 0.5f;
+        var target = MathF.Abs(raw) < 80f ? 0f : MathF.Round(raw / 25f) * 25f;
+        target = Math.Clamp(target, -ctx.WindowWidth * 0.45f, ctx.WindowWidth * 0.20f);
+
+        if (MathF.Abs(target - _mapViewportCorrectionX) > 75f || target == 0f)
+            _mapViewportCorrectionX = target;
+
+        return _mapViewportCorrectionX;
     }
 
     public void Dispose()

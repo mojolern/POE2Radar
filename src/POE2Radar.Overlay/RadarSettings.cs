@@ -72,6 +72,7 @@ public sealed class RadarSettings
     public float MinimapSize { get; set; } = 250f;
     public float MinimapScale { get; set; } = 0.5f;
     public float MinimapOpacity { get; set; } = 0.85f;
+    public bool MinimapAutoAlignToGame { get; set; } = true;
     public string MinimapPosition { get; set; } = "bottomright";
     // Terrain edge (the map outline)
     public string TerrainEdgeColor { get; set; } = "#3cdcff";
@@ -169,6 +170,9 @@ public sealed class RadarSettings
     public bool ShowDeadMonsters { get; set; } = false;
     public bool ShowFriendlyEntities { get; set; } = true;
     public bool ShowImmobileEntities { get; set; } = true;
+    public bool ShowMechanicIcons { get; set; } = true;
+    public bool HideDeadMechanicMonsters { get; set; } = true;
+    public bool ShowMechanicNonMonsterIcons { get; set; } = false;
     public float EntityDrawRange { get; set; } = 0f;
     public float MinEntityHpPct { get; set; } = 0f;
     public bool ShowDistanceRing { get; set; } = false;
@@ -250,6 +254,7 @@ public sealed class RadarSettings
     public TerrainStyle Terrain { get; set; } = new();
 
     // Map drawing
+    public bool MapCenterOnPlayerScreen { get; set; } = true;
     public float MapCenterYShift { get; set; } = -20f;
     public float PlayerBlipSize { get; set; } = 5f;
     public float MinimapPlayerBlipSize { get; set; } = 4f;
