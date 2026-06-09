@@ -163,7 +163,6 @@ public sealed class RadarApp : IDisposable
         var player = NumVec2.Zero;
         POE2Radar.Core.Game.Vector3? playerWorld = null;
         var map = default(Poe2Live.MapUi);
-        Poe2Live.AtlasSnapshot? atlas = null;
         IReadOnlyList<Poe2Atlas.AtlasNodeLive>? atlasNodes = null;
         var areaLevel = 0;
 
@@ -192,8 +191,6 @@ public sealed class RadarApp : IDisposable
                 _atlasNodes = _atlas.ReadNodes(inGameState);
                 atlasNodes = _atlasNodes;
                 _atlasMarks = BuildAtlasMarks(_atlasNodes);
-                if (_atlasNodes.Count == 0 && _live.TryReadAtlasSnapshot(inGameState, out var atlasSnapshot))
-                    atlas = atlasSnapshot;
             }
             else if (_atlasMarks.Count != 0)
             {
@@ -259,7 +256,6 @@ public sealed class RadarApp : IDisposable
             GameMinimap: _live.GameMinimap,
             Hidden: _hidden,
             PlayerWorld: playerWorld,
-            Atlas: atlas,
             AtlasNodes: atlasNodes,
             AtlasMarks: _atlasMarks,
             AtlasLoadingText: _radarSettings.ShowAtlasNodes && _atlas.LastPanelOpen && _atlas.LoadProgress is > 0f and < 1f
@@ -292,7 +288,9 @@ public sealed class RadarApp : IDisposable
                 continue;
 
             var matched = matchedTrack ?? matchedArrow ?? semantic.Label;
-            var label = matched ?? AtlasNodeLabel(n);
+            var label = matched != null && _radarSettings.AtlasRuleLabels.TryGetValue(matched, out var alias) && !string.IsNullOrWhiteSpace(alias)
+                ? alias
+                : matched ?? AtlasNodeLabel(n);
             var color = selected
                 ? _radarSettings.AtlasWaypointColor
                 : matched != null && _radarSettings.AtlasHighlightColors.TryGetValue(matched, out var configured)
@@ -300,7 +298,7 @@ public sealed class RadarApp : IDisposable
                     : semantic.Color;
 
             marks.Add(new AtlasMark(
-                n.X, n.Y,
+                n.X + n.W * 0.5f, n.Y + n.H * 0.5f,
                 Selected: selected || matchedTrack != null,
                 HasContent: n.HasContent,
                 Visited: n.Visited,
@@ -354,6 +352,7 @@ public sealed class RadarApp : IDisposable
             highlightTags = _radarSettings.AtlasHighlightTags,
             arrowTags = _radarSettings.AtlasArrowTags,
             highlightColors = _radarSettings.AtlasHighlightColors,
+            ruleLabels = _radarSettings.AtlasRuleLabels,
             allTags = nodes.SelectMany(n => n.Tags)
                 .GroupBy(t => t, StringComparer.OrdinalIgnoreCase)
                 .OrderByDescending(g => g.Count())

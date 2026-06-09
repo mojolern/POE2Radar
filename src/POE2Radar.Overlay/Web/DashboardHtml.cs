@@ -21,6 +21,7 @@ input[type=text]{background:#1e1e28;border:1px solid #444;color:#fff;padding:4px
 input[type=color]{width:36px;height:24px;border:1px solid #555;background:#1e1e28;cursor:pointer;vertical-align:middle;border-radius:3px}
 input[type=number]{background:#1e1e28;border:1px solid #444;color:#fff;padding:4px 8px;border-radius:4px;width:80px;font-size:13px}
 input[type=range]{width:150px;vertical-align:middle}
+input.num-val{width:64px;background:#1e1e28;border:1px solid #444;color:#78b4ff;border-radius:3px;padding:2px 4px;font-size:12px;text-align:right}
 .search{margin-bottom:8px;display:flex;gap:8px;align-items:center}
 .search input[type=text]{width:250px}
 .filter-btns{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
@@ -33,6 +34,7 @@ tr:hover{background:#333}
 tr.watched{background:#2a3a2a}
 .scrollbox{max-height:450px;overflow-y:auto}
 .btn{padding:3px 10px;border:none;border-radius:4px;cursor:pointer;font-size:12px}
+.btn.on{background:#314d32;color:#9f9}
 .btn-add{background:#2a5a2a;color:#8f8}.btn-add:hover{background:#3a7a3a}
 .btn-rm{background:#5a2a2a;color:#f88}.btn-rm:hover{background:#7a3a3a}
 .btn-save{background:#3a5080;color:#9cf;padding:6px 20px;font-size:13px}.btn-save:hover{background:#4a60a0}
@@ -72,10 +74,11 @@ tr.watched{background:#2a3a2a}
 .atlas-chip{display:inline-block;padding:1px 6px;border-radius:10px;background:#1e1e28;border:1px solid #444;color:#aaa;font-size:11px;margin:1px 3px 1px 0}
 .atlas-pin{background:#4a3a12;color:#ffd76d}
 .atlas-muted{color:#777;font-size:12px}
-.atlas-rule-row{display:grid;grid-template-columns:44px 44px 42px minmax(160px,1fr) 56px 90px;gap:8px;align-items:center;padding:5px 8px;border-bottom:1px solid #333;font-size:12px}
+.atlas-rule-row{display:grid;grid-template-columns:44px 44px 42px 30px minmax(160px,1fr) 56px 90px;gap:8px;align-items:center;padding:5px 8px;border-bottom:1px solid #333;font-size:12px}
 .atlas-rule-row button{padding:2px 7px;border:1px solid #555;border-radius:4px;background:#252530;color:#999;cursor:pointer}
 .atlas-rule-row button.on{background:#314d32;color:#9f9;border-color:#5a8}
 .atlas-rule-row button.arrow.on{background:#4a3a12;color:#ffd76d;border-color:#b88}
+.atlas-rule-row button.rename{padding:2px 5px;color:#78b4ff}
 @media(max-width:760px){
   .panel.panel-with-rail.active{display:block}
   .action-rail{position:sticky;bottom:8px;top:auto;flex-direction:row;flex-wrap:wrap;margin-top:10px}
@@ -263,12 +266,14 @@ tr.watched{background:#2a3a2a}
     <h3>Ring Rules</h3>
     <div class="atlas-toolbar">
       <input type="search" id="atlasRuleSearch" placeholder="Search content/map rule names..." oninput="renderAtlasRules()">
+      <button class="btn" id="atlasRuleTrackFilter" onclick="toggleAtlasRuleFilter('track')">Tracked</button>
+      <button class="btn" id="atlasRuleArrowFilter" onclick="toggleAtlasRuleFilter('arrow')">Arrows</button>
       <button class="btn" style="background:#5a2a2a;color:#f88" onclick="clearAtlasRules()">Clear Rules</button>
       <span class="atlas-muted" id="atlasRuleStatus">Rules color rings by map/content type.</span>
     </div>
     <div class="scrollbox" style="max-height:260px">
       <div class="atlas-rule-row" style="position:sticky;top:0;background:#1e1e28;color:#78b4ff;font-weight:bold">
-        <span>Track</span><span>Arrow</span><span>Color</span><span>Name</span><span>Count</span><span>Type</span>
+        <span>Track</span><span>Arrow</span><span>Color</span><span></span><span>Name</span><span>Count</span><span>Type</span>
       </div>
       <div id="atlasRuleBody"></div>
     </div>
@@ -348,6 +353,7 @@ tr.watched{background:#2a3a2a}
 
 <script>
 let entities=[],watched=[],landmarks=[],db=[],settings={},catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set();
+let atlasRuleFilterTrack=false, atlasRuleFilterArrow=false;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,"\\'").replace(/"/g,'&quot;');
 
@@ -656,10 +662,24 @@ function renderSettingItem(item){
     html+=`<input type="text" value="${v||''}" style="width:250px" onchange="setSetting('${item.key}',this.value)" placeholder="e.g. AreaTransition, Waypoint">`;
   else if(item.type==='num')
     html+=`<input type="range" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
-      oninput="setSetting('${item.key}',parseFloat(this.value));this.nextElementSibling.textContent=this.value">
-      <span class="val">${v}</span>`;
+      oninput="syncNumberSetting('${item.key}',this.value,this.nextElementSibling)">
+      <input class="val num-val" type="number" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
+        ondblclick="this.select()" onchange="syncRangeSetting('${item.key}',this.value,this.previousElementSibling)">`;
   html+=`</div>`;
   return html;
+}
+
+function syncNumberSetting(key,value,box){
+  const n=parseFloat(value);
+  if(Number.isNaN(n))return;
+  settings[key]=n;
+  if(box)box.value=value;
+}
+function syncRangeSetting(key,value,range){
+  const n=parseFloat(value);
+  if(Number.isNaN(n))return;
+  settings[key]=n;
+  if(range)range.value=value;
 }
 
 async function loadAtlasSettings(){
@@ -691,8 +711,9 @@ async function loadSettings(){
         html+=`<input type="text" value="${v||''}" style="width:250px" onchange="setSetting('${item.key}',this.value)" placeholder="e.g. AreaTransition, Waypoint">`;
       else if(item.type==='num')
         html+=`<input type="range" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
-          oninput="setSetting('${item.key}',parseFloat(this.value));this.nextElementSibling.textContent=this.value">
-          <span class="val">${v}</span>`;
+          oninput="syncNumberSetting('${item.key}',this.value,this.nextElementSibling)">
+          <input class="val num-val" type="number" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
+            ondblclick="this.select()" onchange="syncRangeSetting('${item.key}',this.value,this.previousElementSibling)">`;
       html+=`</div>`;
     }
     html+=`</div></div>`;
@@ -1139,6 +1160,7 @@ function syncAtlasRulesFromData(){
   settings.atlasHighlightTags=(atlasData.highlightTags||settings.atlasHighlightTags||[]).slice();
   settings.atlasArrowTags=(atlasData.arrowTags||settings.atlasArrowTags||[]).slice();
   settings.atlasHighlightColors=atlasData.highlightColors||settings.atlasHighlightColors||{};
+  settings.atlasRuleLabels=atlasData.ruleLabels||settings.atlasRuleLabels||{};
 }
 function atlasRuleRows(){
   const rows=[];
@@ -1164,21 +1186,40 @@ function renderAtlasRules(){
   const track=new Set((settings.atlasHighlightTags||[]).map(x=>x.toLowerCase()));
   const arrows=new Set((settings.atlasArrowTags||[]).map(x=>x.toLowerCase()));
   const colors=settings.atlasHighlightColors||(settings.atlasHighlightColors={});
-  const rows=atlasRuleRows().filter(r=>!q||r.title.toLowerCase().includes(q)).slice(0,500);
+  const labels=settings.atlasRuleLabels||(settings.atlasRuleLabels={});
+  const activeFilter=atlasRuleFilterTrack||atlasRuleFilterArrow;
+  $('atlasRuleTrackFilter')?.classList.toggle('on',atlasRuleFilterTrack);
+  $('atlasRuleArrowFilter')?.classList.toggle('on',atlasRuleFilterArrow);
+  const rows=atlasRuleRows().filter(r=>{
+    const key=r.title.toLowerCase();
+    const alias=(labels[r.title]||'').toLowerCase();
+    const tr=track.has(key), ar=arrows.has(key);
+    if(activeFilter&&!((atlasRuleFilterTrack&&tr)||(atlasRuleFilterArrow&&ar)))return false;
+    return !q||key.includes(q)||alias.includes(q);
+  }).slice(0,500);
   $('atlasRuleStatus').textContent=`${settings.atlasHighlightTags?.length||0} tracked · ${settings.atlasArrowTags?.length||0} arrows`;
   box.innerHTML=rows.map(r=>{
     const key=r.title.toLowerCase();
     const tr=track.has(key), ar=arrows.has(key);
     const col=colors[r.title]||defaultAtlasRuleColor(r.title,r.type);
+    const alias=labels[r.title]||'';
+    const display=alias||r.title;
+    const title=alias?`${alias} (${r.title})`:r.title;
     return `<div class="atlas-rule-row">
       <button class="${tr?'on':''}" onclick="toggleAtlasRule('${esc(r.title)}','track')">${tr?'On':'Off'}</button>
       <button class="arrow ${ar?'on':''}" onclick="toggleAtlasRule('${esc(r.title)}','arrow')">${ar?'On':'Off'}</button>
       <input type="color" value="${col}" onchange="setAtlasRuleColor('${esc(r.title)}',this.value)">
-      <span title="${esc(r.title)}">${esc(r.title)}</span>
+      <button class="rename" title="Rename rule" onclick="renameAtlasRule('${esc(r.title)}')">&#9998;</button>
+      <span title="${esc(title)}">${esc(display)}</span>
       <span class="atlas-muted">${r.count}</span>
       <span class="atlas-muted">${r.type}</span>
     </div>`;
   }).join('')||'<div class="atlas-muted" style="padding:8px">No live Atlas rule candidates yet.</div>';
+}
+function toggleAtlasRuleFilter(kind){
+  if(kind==='track')atlasRuleFilterTrack=!atlasRuleFilterTrack;
+  if(kind==='arrow')atlasRuleFilterArrow=!atlasRuleFilterArrow;
+  renderAtlasRules();
 }
 async function toggleAtlasRule(title,kind){
   settings.atlasHighlightTags=settings.atlasHighlightTags||[];
@@ -1198,10 +1239,23 @@ async function setAtlasRuleColor(title,color){
   settings.atlasRulesInitialized=true;
   await saveAtlasRuleSettings();
 }
+async function renameAtlasRule(title){
+  settings.atlasRuleLabels=settings.atlasRuleLabels||{};
+  const current=settings.atlasRuleLabels[title]||title;
+  const name=prompt('Rename Atlas ring rule:',current);
+  if(name===null)return;
+  const trimmed=name.trim();
+  if(!trimmed||trimmed===title)delete settings.atlasRuleLabels[title];
+  else settings.atlasRuleLabels[title]=trimmed;
+  settings.atlasRulesInitialized=true;
+  await saveAtlasRuleSettings();
+  renderAtlasRules();
+}
 async function clearAtlasRules(){
   settings.atlasHighlightTags=[];
   settings.atlasArrowTags=[];
   settings.atlasHighlightColors={};
+  settings.atlasRuleLabels={};
   settings.atlasRulesInitialized=true;
   await saveAtlasRuleSettings();
   renderAtlasRules();
@@ -1211,6 +1265,7 @@ async function saveAtlasRuleSettings(){
     atlasHighlightTags:settings.atlasHighlightTags||[],
     atlasArrowTags:settings.atlasArrowTags||[],
     atlasHighlightColors:settings.atlasHighlightColors||{},
+    atlasRuleLabels:settings.atlasRuleLabels||{},
     atlasRulesInitialized:settings.atlasRulesInitialized||false
   })});
 }

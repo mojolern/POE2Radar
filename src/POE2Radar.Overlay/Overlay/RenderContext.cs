@@ -61,7 +61,6 @@ public sealed record RenderContext(
     Poe2Live.MinimapUi GameMinimap = default,
     POE2Radar.Overlay.Web.HiddenEntities? Hidden = null,
     POE2Radar.Core.Game.Vector3? PlayerWorld = null,
-    Poe2Live.AtlasSnapshot? Atlas = null,
     IReadOnlyList<Poe2Atlas.AtlasNodeLive>? AtlasNodes = null,
     IReadOnlyList<AtlasMark>? AtlasMarks = null,
     string? AtlasLoadingText = null,

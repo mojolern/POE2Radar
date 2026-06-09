@@ -232,15 +232,14 @@ public sealed class Poe2Atlas
         var contentRow = Ptr(row + 0x38);
         if (contentRow != 0)
         {
-            var namePtr = Ptr(contentRow + 0x30);
-            var name = namePtr != 0 ? _reader.ReadStringUtf16(namePtr, 64) : "";
+            var name = ReadDisplayName(contentRow);
             if (LooksLikeName(name)) tags.Add(name.Trim());
         }
 
         var stats = Ptr(row + 0x50);
         if (stats != 0)
         {
-            Span<byte> buffer = stackalloc byte[0x100];
+            Span<byte> buffer = stackalloc byte[0x400];
             var n = _reader.TryReadBytes(stats, buffer);
             for (var o = 0; o + 8 <= n; o += 8)
             {
@@ -262,6 +261,32 @@ public sealed class Poe2Atlas
         }
 
         return (map, tags.Count == 0 ? NoTags : tags.ToArray());
+    }
+
+    private string ReadDisplayName(nint row)
+    {
+        ReadOnlySpan<int> offsets = [0x30, 0x28, 0x20, 0x18, 0x10, 0x08, 0x00];
+        foreach (var offset in offsets)
+        {
+            var p = Ptr(row + offset);
+            if (p == 0) continue;
+
+            var s = _reader.ReadStringUtf16(p, 80);
+            if (LooksLikeName(s)) return s.Trim();
+
+            s = ReadAscii(p, 80);
+            if (LooksLikeName(s)) return s.Trim();
+
+            var pp = Ptr(p);
+            if (pp == 0) continue;
+
+            s = _reader.ReadStringUtf16(pp, 80);
+            if (LooksLikeName(s)) return s.Trim();
+
+            s = ReadAscii(pp, 80);
+            if (LooksLikeName(s)) return s.Trim();
+        }
+        return "";
     }
 
     private bool AtlasPanelOpen(nint uiRoot)

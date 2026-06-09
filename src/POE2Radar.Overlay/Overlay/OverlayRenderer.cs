@@ -144,7 +144,7 @@ public sealed class OverlayRenderer : IDisposable
             {
                 DrawStatus(rt, ctx);
                 if (ctx.InGame && ctx.Radar?.ShowNameplates != false) DrawNameplates(rt, ctx);
-                if (ctx.InGame && ctx.Radar?.ShowAtlasNodes == true && (ctx.AtlasMarks is { Count: > 0 } || ctx.AtlasNodes is { Count: > 0 } || ctx.Atlas is { IsVisible: true }))
+                if (ctx.InGame && ctx.Radar?.ShowAtlasNodes == true && (ctx.AtlasMarks is { Count: > 0 } || ctx.AtlasNodes is { Count: > 0 }))
                     DrawAtlasNodes(rt, ctx);
                 if (ctx is { InGame: true, Map.IsVisible: true })
                     DrawMap(rt, ctx);
@@ -446,71 +446,16 @@ public sealed class OverlayRenderer : IDisposable
             DrawLiveAtlasNodes(rt, ctx, liveNodes);
             return;
         }
-
-        var atlas = ctx.Atlas;
-        if (atlas is not { IsVisible: true } a || a.Nodes.Count == 0) return;
-        if (a.LocalRect.Width <= 1f || a.LocalRect.Height <= 1f) return;
-
-        var settings = ctx.Radar;
-        var r = MathF.Max(1f, ctx.Radar?.AtlasNodeDotSize ?? 4f);
-        var autoAlign = settings?.AtlasAutoAlign ?? true;
-        var scaleTrim = Math.Clamp(settings?.AtlasScale ?? 1f, 0.25f, 4f);
-        var scale = (ctx.WindowWidth / a.LocalRect.Width) * scaleTrim;
-        var target = AtlasScreenTarget(a, ctx);
-        var autoScale = new NumVec2(target.Width / a.LocalRect.Width, target.Height / a.LocalRect.Height);
-        var offset = new NumVec2(settings?.AtlasOffsetX ?? 0f, settings?.AtlasOffsetY ?? 0f);
-        var showHidden = settings?.AtlasShowHiddenNodes ?? true;
-        var showLabels = settings?.AtlasShowLabels ?? false;
-        var labelFs = Math.Clamp(settings?.AtlasLabelFontSize ?? 11f, 8f, 32f);
-        var labelOffsetY = Math.Clamp(settings?.AtlasLabelOffsetY ?? -18f, -100f, 100f);
-        var labelTf = showLabels ? GetTextFormat(labelFs, ref _tfAtlas, ref _lastAtlasFs) : null;
-
-        foreach (var node in a.Nodes)
-        {
-            if (!node.InClip) continue;
-            if (!node.UiVisible && !showHidden) continue;
-            var center = node.Center;
-            NumVec2 p;
-            if (autoAlign)
-            {
-                p = AtlasClipToScreen(center, a, ctx);
-            }
-            else
-            {
-                p = new NumVec2(
-                    (center.X - a.LocalRect.L) * scale,
-                    (center.Y - a.LocalRect.T) * scale) + offset;
-            }
-            if (p.X < -20f || p.X > ctx.WindowWidth + 20f || p.Y < -20f || p.Y > ctx.WindowHeight + 20f)
-                continue;
-
-            SetStyleBrush(settings?.AtlasNodeColor ?? "#ff66ff", node.UiVisible ? 0.92f : 0.55f);
-            var brush = _bStyle!;
-            rt.FillEllipse(new Ellipse(p, r, r), brush);
-            rt.DrawEllipse(new Ellipse(p, r + 1.5f, r + 1.5f), _bText!, 0.8f);
-
-            if (showLabels && labelTf != null && !string.IsNullOrWhiteSpace(node.Name))
-            {
-                var label = node.Name;
-                var w = MathF.Max(80f, MathF.Min(240f, label.Length * labelFs * 0.62f));
-                rt.DrawText(label, labelTf,
-                    new Rect(p.X - w * 0.5f, p.Y + labelOffsetY - labelFs, p.X + w * 0.5f, p.Y + labelOffsetY + 2f),
-                    _bText!, DrawTextOptions.Clip);
-            }
-        }
     }
 
     private void DrawAtlasMarks(ID2D1RenderTarget rt, RenderContext ctx, IReadOnlyList<AtlasMark> marks)
     {
         var settings = ctx.Radar;
-        var scaleTrim = Math.Clamp(settings?.AtlasScale ?? 1f, 0.25f, 4f);
         var showLabels = settings?.AtlasShowLabels ?? false;
         var labelFs = Math.Clamp(settings?.AtlasLabelFontSize ?? 11f, 8f, 32f);
         var labelOffsetY = Math.Clamp(settings?.AtlasLabelOffsetY ?? -18f, -100f, 100f);
         var labelTf = GetTextFormat(labelFs, ref _tfAtlas, ref _lastAtlasFs);
-        var offset = new NumVec2(settings?.AtlasOffsetX ?? 0f, settings?.AtlasOffsetY ?? 0f);
-        var zoom = MedianAtlasZoom(ctx.AtlasNodes ?? Array.Empty<Poe2Atlas.AtlasNodeLive>());
-        var scale = (ctx.WindowHeight / 1600f) * zoom * scaleTrim;
+        var (scale, offset) = AtlasLiveProjection(ctx, ctx.AtlasNodes ?? Array.Empty<Poe2Atlas.AtlasNodeLive>());
         var center = new NumVec2(ctx.WindowWidth * 0.5f, ctx.WindowHeight * 0.5f);
 
         foreach (var mark in marks)
@@ -596,20 +541,17 @@ public sealed class OverlayRenderer : IDisposable
     {
         var settings = ctx.Radar;
         var r = MathF.Max(1f, settings?.AtlasNodeDotSize ?? 4f);
-        var scaleTrim = Math.Clamp(settings?.AtlasScale ?? 1f, 0.25f, 4f);
         var showHidden = settings?.AtlasShowHiddenNodes ?? true;
         var showLabels = settings?.AtlasShowLabels ?? false;
         var labelFs = Math.Clamp(settings?.AtlasLabelFontSize ?? 11f, 8f, 32f);
         var labelOffsetY = Math.Clamp(settings?.AtlasLabelOffsetY ?? -18f, -100f, 100f);
         var labelTf = showLabels ? GetTextFormat(labelFs, ref _tfAtlas, ref _lastAtlasFs) : null;
-        var offset = new NumVec2(settings?.AtlasOffsetX ?? 0f, settings?.AtlasOffsetY ?? 0f);
-        var zoom = MedianAtlasZoom(nodes);
-        var scale = (ctx.WindowHeight / 1600f) * zoom * scaleTrim;
+        var (scale, offset) = AtlasLiveProjection(ctx, nodes);
 
         foreach (var node in nodes)
         {
             if (!node.Visible && !showHidden) continue;
-            var p = new NumVec2(node.X * scale, node.Y * scale) + offset;
+            var p = new NumVec2((node.X + node.W * 0.5f) * scale, (node.Y + node.H * 0.5f) * scale) + offset;
             if (p.X < -40f || p.X > ctx.WindowWidth + 40f || p.Y < -40f || p.Y > ctx.WindowHeight + 40f)
                 continue;
 
@@ -653,25 +595,15 @@ public sealed class OverlayRenderer : IDisposable
         return node.Tags.Count > 0 ? node.Tags[0] : "";
     }
 
-    private static Poe2Live.AtlasRect AtlasScreenTarget(Poe2Live.AtlasSnapshot atlas, RenderContext ctx)
+    private static (float Scale, NumVec2 Offset) AtlasLiveProjection(RenderContext ctx, IReadOnlyList<Poe2Atlas.AtlasNodeLive> nodes)
     {
-        var scale = MathF.Max(ctx.WindowWidth / atlas.LocalRect.Width, ctx.WindowHeight / atlas.LocalRect.Height);
-        var width = atlas.LocalRect.Width * scale;
-        var height = atlas.LocalRect.Height * scale;
-        var left = (ctx.WindowWidth - width) * 0.5f;
-        var top = (ctx.WindowHeight - height) * 0.5f;
-        return new Poe2Live.AtlasRect(left, top, left + width, top + height);
-    }
+        var zoom = MedianAtlasZoom(nodes);
+        var scale = (ctx.WindowHeight / 1600f) * zoom;
+        if (ctx.Radar?.AtlasAutoAlign != false)
+            return (scale, NumVec2.Zero);
 
-    private static NumVec2 AtlasClipToScreen(NumVec2 center, Poe2Live.AtlasSnapshot atlas, RenderContext ctx)
-    {
-        var clip = atlas.ClipRect.Width > 1f && atlas.ClipRect.Height > 1f
-            ? atlas.ClipRect
-            : atlas.LocalRect;
-
-        return new NumVec2(
-            (center.X - clip.L) * ctx.WindowWidth / clip.Width,
-            (center.Y - clip.T) * ctx.WindowHeight / clip.Height);
+        scale *= Math.Clamp(ctx.Radar?.AtlasScale ?? 1f, 0.25f, 4f);
+        return (scale, new NumVec2(ctx.Radar?.AtlasOffsetX ?? 0f, ctx.Radar?.AtlasOffsetY ?? 0f));
     }
 
     private void EnsureShapeGeometries()

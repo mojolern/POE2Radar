@@ -93,6 +93,7 @@ public sealed class RadarSettings
     public List<string> AtlasHighlightTags { get; set; } = new();
     public List<string> AtlasArrowTags { get; set; } = new();
     public Dictionary<string, string> AtlasHighlightColors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> AtlasRuleLabels { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool AtlasRulesInitialized { get; set; } = false;
     public float AtlasNodeDotSize { get; set; } = 4f;
     public float AtlasLabelFontSize { get; set; } = 11f;
