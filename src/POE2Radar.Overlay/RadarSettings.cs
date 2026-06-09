@@ -83,6 +83,26 @@ public sealed class RadarSettings
     public float MinimapOffsetY { get; set; } = 0f;
     public float MinimapLabelFontSize { get; set; } = 9f;
 
+    // Atlas Assist
+    public bool ShowAtlasNodes { get; set; } = false;
+    public bool AtlasAutoAlign { get; set; } = true;
+    public bool AtlasShowHiddenNodes { get; set; } = true;
+    public bool AtlasShowLabels { get; set; } = false;
+    public bool AtlasDrawAll { get; set; } = false;
+    public bool AtlasShowWaypointArrows { get; set; } = true;
+    public List<string> AtlasHighlightTags { get; set; } = new();
+    public List<string> AtlasArrowTags { get; set; } = new();
+    public Dictionary<string, string> AtlasHighlightColors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public bool AtlasRulesInitialized { get; set; } = false;
+    public float AtlasNodeDotSize { get; set; } = 4f;
+    public float AtlasLabelFontSize { get; set; } = 11f;
+    public float AtlasLabelOffsetY { get; set; } = -18f;
+    public float AtlasScale { get; set; } = 1f;
+    public float AtlasOffsetX { get; set; } = 0f;
+    public float AtlasOffsetY { get; set; } = 0f;
+    public string AtlasNodeColor { get; set; } = "#ff66ff";
+    public string AtlasWaypointColor { get; set; } = "#e0b341";
+
     // Minimap — what to show (dots)
     public bool MinimapShowMonsters { get; set; } = true;
     public bool MinimapShowBosses { get; set; } = true;

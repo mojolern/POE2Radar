@@ -68,10 +68,12 @@ public sealed class OverlayRenderer : IDisposable
     private ID2D1SolidColorBrush? _bCheatOn, _bCheatOff, _bCheatMiss, _bFog, _bRing, _bOutline, _bFriendly;
     private ID2D1SolidColorBrush? _bStyle; // scratch brush recolored per-draw for config-driven icons
     private IDWriteTextFormat? _tf;
-    private IDWriteTextFormat? _tfLandmark, _tfTransition, _tfChest, _tfStatus;
-    private float _lastLmFs, _lastTrFs, _lastChFs, _lastStatusFs;
+    private IDWriteTextFormat? _tfLandmark, _tfTransition, _tfChest, _tfStatus, _tfAtlas;
+    private float _lastLmFs, _lastTrFs, _lastChFs, _lastStatusFs, _lastAtlasFs;
     private string _lastFont = "";
     private float _mapViewportCorrectionX;
+    private float _lastMapShiftX = float.NaN;
+    private float _lastMapShiftY = float.NaN;
     private bool _ready;
 
     public OverlayRenderer(OverlayWindow window) { _window = window; }
@@ -125,6 +127,7 @@ public sealed class OverlayRenderer : IDisposable
             _tfTransition?.Dispose(); _tfTransition = null;
             _tfChest?.Dispose(); _tfChest = null;
             _tfStatus?.Dispose(); _tfStatus = null;
+            _tfAtlas?.Dispose(); _tfAtlas = null;
             _tf?.Dispose();
             _tf = _window.DWriteFactory.CreateTextFormat(font, null, FontWeight.Normal, Vortice.DirectWrite.FontStyle.Normal, FontStretch.Normal, 12f, "en-us");
         }
@@ -141,6 +144,8 @@ public sealed class OverlayRenderer : IDisposable
             {
                 DrawStatus(rt, ctx);
                 if (ctx.InGame && ctx.Radar?.ShowNameplates != false) DrawNameplates(rt, ctx);
+                if (ctx.InGame && ctx.Radar?.ShowAtlasNodes == true && (ctx.AtlasMarks is { Count: > 0 } || ctx.AtlasNodes is { Count: > 0 } || ctx.Atlas is { IsVisible: true }))
+                    DrawAtlasNodes(rt, ctx);
                 if (ctx is { InGame: true, Map.IsVisible: true })
                     DrawMap(rt, ctx);
                 if (ctx.InGame && ctx.Radar?.ShowMinimap == true && !ctx.Map.IsVisible)
@@ -241,7 +246,7 @@ public sealed class OverlayRenderer : IDisposable
         // POI IN MAP panel — landmarks, exits, quest pins, bosses — all at a glance below cheats
         if (ctx.InGame)
         {
-            var poiY = 6 + lh * 3 + 8f;
+            var poiY = DrawAtlasLoadingStatus(rt, ctx, stf, cw, lh, 6 + lh * 3 + 8f);
             var poiFs = fs * 0.9f;
             var poiTf = GetTextFormat(poiFs, ref _tfTransition, ref _lastTrFs);
             var poiCw = poiFs * 0.6f;
@@ -299,6 +304,27 @@ public sealed class OverlayRenderer : IDisposable
                 }
             }
         }
+    }
+
+    private float DrawAtlasLoadingStatus(ID2D1RenderTarget rt, RenderContext ctx, IDWriteTextFormat stf, float cw, float lh, float y)
+    {
+        if (string.IsNullOrWhiteSpace(ctx.AtlasLoadingText)) return y;
+
+        var text = ctx.AtlasLoadingText.Length > 64
+            ? ctx.AtlasLoadingText[..64] + "..."
+            : ctx.AtlasLoadingText;
+        var progress = Math.Clamp(ctx.AtlasLoadingProgress, 0f, 1f);
+        var panelW = MathF.Max(300f, MathF.Min(560f, text.Length * cw + 34f));
+        var panelH = lh + 15f;
+        var left = 6f;
+        var top = y - 2f;
+
+        _bStyle!.Color = new Color4(0.20f, 1.00f, 0.20f, 1.00f);
+        rt.FillRectangle(new Vortice.RawRectF(left, top, left + panelW, top + panelH), _bPanel!);
+        rt.DrawText(text, stf, new Rect(left + 8f, top + 2f, left + panelW - 8f, top + lh + 2f), _bStyle, DrawTextOptions.Clip);
+        rt.DrawRectangle(new Vortice.RawRectF(left + 8f, top + lh + 5f, left + panelW - 8f, top + lh + 9f), _bStyle, 1f);
+        rt.FillRectangle(new Vortice.RawRectF(left + 8f, top + lh + 5f, left + 8f + (panelW - 16f) * progress, top + lh + 9f), _bStyle);
+        return y + panelH + 5f;
     }
 
     /// <summary>
@@ -402,6 +428,250 @@ public sealed class OverlayRenderer : IDisposable
                 rt.FillEllipse(new Ellipse(destP, 5f, 5f), pathBrush);
             }
         }
+    }
+
+    private void DrawAtlasNodes(ID2D1RenderTarget rt, RenderContext ctx)
+    {
+        if (ctx.AtlasMarks is { Count: > 0 } marks)
+        {
+            DrawAtlasMarks(rt, ctx, marks);
+            return;
+        }
+
+        if (ctx.Radar?.AtlasDrawAll != true)
+            return;
+
+        if (ctx.AtlasNodes is { Count: > 0 } liveNodes)
+        {
+            DrawLiveAtlasNodes(rt, ctx, liveNodes);
+            return;
+        }
+
+        var atlas = ctx.Atlas;
+        if (atlas is not { IsVisible: true } a || a.Nodes.Count == 0) return;
+        if (a.LocalRect.Width <= 1f || a.LocalRect.Height <= 1f) return;
+
+        var settings = ctx.Radar;
+        var r = MathF.Max(1f, ctx.Radar?.AtlasNodeDotSize ?? 4f);
+        var autoAlign = settings?.AtlasAutoAlign ?? true;
+        var scaleTrim = Math.Clamp(settings?.AtlasScale ?? 1f, 0.25f, 4f);
+        var scale = (ctx.WindowWidth / a.LocalRect.Width) * scaleTrim;
+        var target = AtlasScreenTarget(a, ctx);
+        var autoScale = new NumVec2(target.Width / a.LocalRect.Width, target.Height / a.LocalRect.Height);
+        var offset = new NumVec2(settings?.AtlasOffsetX ?? 0f, settings?.AtlasOffsetY ?? 0f);
+        var showHidden = settings?.AtlasShowHiddenNodes ?? true;
+        var showLabels = settings?.AtlasShowLabels ?? false;
+        var labelFs = Math.Clamp(settings?.AtlasLabelFontSize ?? 11f, 8f, 32f);
+        var labelOffsetY = Math.Clamp(settings?.AtlasLabelOffsetY ?? -18f, -100f, 100f);
+        var labelTf = showLabels ? GetTextFormat(labelFs, ref _tfAtlas, ref _lastAtlasFs) : null;
+
+        foreach (var node in a.Nodes)
+        {
+            if (!node.InClip) continue;
+            if (!node.UiVisible && !showHidden) continue;
+            var center = node.Center;
+            NumVec2 p;
+            if (autoAlign)
+            {
+                p = AtlasClipToScreen(center, a, ctx);
+            }
+            else
+            {
+                p = new NumVec2(
+                    (center.X - a.LocalRect.L) * scale,
+                    (center.Y - a.LocalRect.T) * scale) + offset;
+            }
+            if (p.X < -20f || p.X > ctx.WindowWidth + 20f || p.Y < -20f || p.Y > ctx.WindowHeight + 20f)
+                continue;
+
+            SetStyleBrush(settings?.AtlasNodeColor ?? "#ff66ff", node.UiVisible ? 0.92f : 0.55f);
+            var brush = _bStyle!;
+            rt.FillEllipse(new Ellipse(p, r, r), brush);
+            rt.DrawEllipse(new Ellipse(p, r + 1.5f, r + 1.5f), _bText!, 0.8f);
+
+            if (showLabels && labelTf != null && !string.IsNullOrWhiteSpace(node.Name))
+            {
+                var label = node.Name;
+                var w = MathF.Max(80f, MathF.Min(240f, label.Length * labelFs * 0.62f));
+                rt.DrawText(label, labelTf,
+                    new Rect(p.X - w * 0.5f, p.Y + labelOffsetY - labelFs, p.X + w * 0.5f, p.Y + labelOffsetY + 2f),
+                    _bText!, DrawTextOptions.Clip);
+            }
+        }
+    }
+
+    private void DrawAtlasMarks(ID2D1RenderTarget rt, RenderContext ctx, IReadOnlyList<AtlasMark> marks)
+    {
+        var settings = ctx.Radar;
+        var scaleTrim = Math.Clamp(settings?.AtlasScale ?? 1f, 0.25f, 4f);
+        var showLabels = settings?.AtlasShowLabels ?? false;
+        var labelFs = Math.Clamp(settings?.AtlasLabelFontSize ?? 11f, 8f, 32f);
+        var labelOffsetY = Math.Clamp(settings?.AtlasLabelOffsetY ?? -18f, -100f, 100f);
+        var labelTf = GetTextFormat(labelFs, ref _tfAtlas, ref _lastAtlasFs);
+        var offset = new NumVec2(settings?.AtlasOffsetX ?? 0f, settings?.AtlasOffsetY ?? 0f);
+        var zoom = MedianAtlasZoom(ctx.AtlasNodes ?? Array.Empty<Poe2Atlas.AtlasNodeLive>());
+        var scale = (ctx.WindowHeight / 1600f) * zoom * scaleTrim;
+        var center = new NumVec2(ctx.WindowWidth * 0.5f, ctx.WindowHeight * 0.5f);
+
+        foreach (var mark in marks)
+        {
+            var p = new NumVec2(mark.X * scale, mark.Y * scale) + offset;
+            var onScreen = p.X >= 0 && p.X <= ctx.WindowWidth && p.Y >= 0 && p.Y <= ctx.WindowHeight;
+            var color = ParseColor(mark.Color ?? settings?.AtlasWaypointColor ?? "#e0b341", mark.Selected ? 1f : 0.9f);
+
+            if (!onScreen)
+            {
+                if (mark.Arrow && settings?.AtlasShowWaypointArrows != false)
+                    DrawAtlasArrow(rt, p, center, ctx.WindowWidth, ctx.WindowHeight, color, mark.Label, labelTf);
+                continue;
+            }
+
+            _bStyle!.Color = color;
+            if (mark.Selected || mark.Arrow)
+            {
+                var c = p;
+                rt.DrawEllipse(new Ellipse(c, 18f, 18f), _bStyle, 3f);
+                rt.DrawEllipse(new Ellipse(c, 9f, 9f), _bStyle, 2f);
+                DrawAtlasStar(rt, new NumVec2(c.X, c.Y - 25f), _bStyle, 8f);
+            }
+            else if (mark.IconType > 0)
+            {
+                rt.DrawEllipse(new Ellipse(p, 7f, 7f), _bStyle, 2f);
+            }
+            else if (mark.Visited)
+            {
+                rt.DrawEllipse(new Ellipse(p, 16f, 16f), _bStyle, 2.5f);
+                rt.DrawEllipse(new Ellipse(p, 8f, 8f), _bStyle, 1.6f);
+            }
+            else
+            {
+                rt.DrawEllipse(new Ellipse(p, mark.HasContent ? 13f : 11f, mark.HasContent ? 13f : 11f), _bStyle, 2f);
+            }
+
+            if ((showLabels || mark.Selected) && !string.IsNullOrWhiteSpace(mark.Label))
+            {
+                var w = MathF.Max(90f, MathF.Min(280f, mark.Label.Length * labelFs * 0.62f));
+                rt.DrawText(mark.Label, labelTf,
+                    new Rect(p.X - w * 0.5f, p.Y + labelOffsetY - labelFs, p.X + w * 0.5f, p.Y + labelOffsetY + 2f),
+                    _bText!, DrawTextOptions.Clip);
+            }
+        }
+    }
+
+    private void DrawAtlasArrow(ID2D1RenderTarget rt, NumVec2 target, NumVec2 center, float width, float height, Color4 color, string? label, IDWriteTextFormat labelTf)
+    {
+        var delta = target - center;
+        var len = delta.Length();
+        if (len < 1f) return;
+        var dir = delta / len;
+        const float margin = 46f;
+        var tx = MathF.Abs(dir.X) > 1e-4f ? (width * 0.5f - margin) / MathF.Abs(dir.X) : 1e9f;
+        var ty = MathF.Abs(dir.Y) > 1e-4f ? (height * 0.5f - margin) / MathF.Abs(dir.Y) : 1e9f;
+        var edge = center + dir * MathF.Min(tx, ty);
+        var perp = new NumVec2(-dir.Y, dir.X);
+        var tip = edge + dir * 12f;
+        var bl = edge - dir * 10f + perp * 10f;
+        var br = edge - dir * 10f - perp * 10f;
+
+        _bStyle!.Color = color;
+        rt.DrawLine(tip, bl, _bStyle, 4f);
+        rt.DrawLine(tip, br, _bStyle, 4f);
+        rt.DrawLine(bl, br, _bStyle, 4f);
+
+        if (!string.IsNullOrWhiteSpace(label))
+        {
+            var textAt = edge - dir * 56f;
+            rt.DrawText(label, labelTf,
+                new Rect(textAt.X - 100f, textAt.Y - 10f, textAt.X + 100f, textAt.Y + 12f),
+                _bText!, DrawTextOptions.Clip);
+        }
+    }
+
+    private void DrawAtlasStar(ID2D1RenderTarget rt, NumVec2 p, ID2D1SolidColorBrush brush, float size)
+    {
+        DrawIcon(rt, Icon.Star, p, size, brush, filled: false);
+    }
+
+    private void DrawLiveAtlasNodes(ID2D1RenderTarget rt, RenderContext ctx, IReadOnlyList<Poe2Atlas.AtlasNodeLive> nodes)
+    {
+        var settings = ctx.Radar;
+        var r = MathF.Max(1f, settings?.AtlasNodeDotSize ?? 4f);
+        var scaleTrim = Math.Clamp(settings?.AtlasScale ?? 1f, 0.25f, 4f);
+        var showHidden = settings?.AtlasShowHiddenNodes ?? true;
+        var showLabels = settings?.AtlasShowLabels ?? false;
+        var labelFs = Math.Clamp(settings?.AtlasLabelFontSize ?? 11f, 8f, 32f);
+        var labelOffsetY = Math.Clamp(settings?.AtlasLabelOffsetY ?? -18f, -100f, 100f);
+        var labelTf = showLabels ? GetTextFormat(labelFs, ref _tfAtlas, ref _lastAtlasFs) : null;
+        var offset = new NumVec2(settings?.AtlasOffsetX ?? 0f, settings?.AtlasOffsetY ?? 0f);
+        var zoom = MedianAtlasZoom(nodes);
+        var scale = (ctx.WindowHeight / 1600f) * zoom * scaleTrim;
+
+        foreach (var node in nodes)
+        {
+            if (!node.Visible && !showHidden) continue;
+            var p = new NumVec2(node.X * scale, node.Y * scale) + offset;
+            if (p.X < -40f || p.X > ctx.WindowWidth + 40f || p.Y < -40f || p.Y > ctx.WindowHeight + 40f)
+                continue;
+
+            var alpha = node.Visible ? 0.92f : 0.55f;
+            SetStyleBrush(settings?.AtlasNodeColor ?? "#ff66ff", alpha);
+            var brush = _bStyle!;
+            rt.FillEllipse(new Ellipse(p, r, r), brush);
+            rt.DrawEllipse(new Ellipse(p, r + 1.5f, r + 1.5f), _bText!, 0.8f);
+
+            var label = AtlasNodeLabel(node);
+            if (showLabels && labelTf != null && !string.IsNullOrWhiteSpace(label))
+            {
+                var w = MathF.Max(90f, MathF.Min(280f, label.Length * labelFs * 0.62f));
+                rt.DrawText(label, labelTf,
+                    new Rect(p.X - w * 0.5f, p.Y + labelOffsetY - labelFs, p.X + w * 0.5f, p.Y + labelOffsetY + 2f),
+                    _bText!, DrawTextOptions.Clip);
+            }
+        }
+    }
+
+    private static float MedianAtlasZoom(IReadOnlyList<Poe2Atlas.AtlasNodeLive> nodes)
+    {
+        Span<float> stack = stackalloc float[128];
+        var values = stack;
+        var count = 0;
+        foreach (var node in nodes)
+        {
+            if (node.Scale is <= 0.01f or > 8f) continue;
+            if (count >= values.Length) break;
+            values[count++] = node.Scale;
+        }
+        if (count == 0) return 0.85f;
+        values = values[..count];
+        values.Sort();
+        return values[count / 2];
+    }
+
+    private static string AtlasNodeLabel(Poe2Atlas.AtlasNodeLive node)
+    {
+        if (!string.IsNullOrWhiteSpace(node.MapName)) return node.MapName;
+        return node.Tags.Count > 0 ? node.Tags[0] : "";
+    }
+
+    private static Poe2Live.AtlasRect AtlasScreenTarget(Poe2Live.AtlasSnapshot atlas, RenderContext ctx)
+    {
+        var scale = MathF.Max(ctx.WindowWidth / atlas.LocalRect.Width, ctx.WindowHeight / atlas.LocalRect.Height);
+        var width = atlas.LocalRect.Width * scale;
+        var height = atlas.LocalRect.Height * scale;
+        var left = (ctx.WindowWidth - width) * 0.5f;
+        var top = (ctx.WindowHeight - height) * 0.5f;
+        return new Poe2Live.AtlasRect(left, top, left + width, top + height);
+    }
+
+    private static NumVec2 AtlasClipToScreen(NumVec2 center, Poe2Live.AtlasSnapshot atlas, RenderContext ctx)
+    {
+        var clip = atlas.ClipRect.Width > 1f && atlas.ClipRect.Height > 1f
+            ? atlas.ClipRect
+            : atlas.LocalRect;
+
+        return new NumVec2(
+            (center.X - clip.L) * ctx.WindowWidth / clip.Width,
+            (center.Y - clip.T) * ctx.WindowHeight / clip.Height);
     }
 
     private void EnsureShapeGeometries()
@@ -1162,6 +1432,12 @@ public sealed class OverlayRenderer : IDisposable
         else { r = 60; g = 220; b = 255; }
     }
 
+    private static Color4 ParseColor(string hex, float opacity)
+    {
+        ParseHex(hex, out var r, out var g, out var b);
+        return new Color4(r / 255f, g / 255f, b / 255f, Math.Clamp(opacity, 0f, 1f));
+    }
+
     private static NumVec2 Project(NumVec2 cell, NumVec2 player, NumVec2 center, float scale)
     {
         var d = cell - player;
@@ -1174,10 +1450,18 @@ public sealed class OverlayRenderer : IDisposable
         screen = default;
         if (ctx.CameraMatrix is not { Length: >= 16 } m) return false;
 
-        var player = ctx.Entities.FirstOrDefault(e => e.Category == Poe2Live.EntityCategory.Player);
-        if (player.Metadata == null) return false;
+        POE2Radar.Core.Game.Vector3 w;
+        if (ctx.PlayerWorld is { } freshWorld)
+        {
+            w = freshWorld;
+        }
+        else
+        {
+            var player = ctx.Entities.FirstOrDefault(e => e.Category == Poe2Live.EntityCategory.Player);
+            if (player.Metadata == null) return false;
+            w = player.World;
+        }
 
-        var w = player.World;
         var cw = w.X * m[3] + w.Y * m[7] + w.Z * m[11] + m[15];
         if (cw <= 0.001f) return false;
 
@@ -1197,14 +1481,23 @@ public sealed class OverlayRenderer : IDisposable
         if (ctx.Radar?.MapCenterOnPlayerScreen == false || !TryPlayerScreenPoint(ctx, out var playerScreen))
         {
             _mapViewportCorrectionX = 0f;
+            _lastMapShiftX = float.NaN;
+            _lastMapShiftY = float.NaN;
             return 0f;
         }
 
         var raw = playerScreen.X - ctx.WindowWidth * 0.5f;
-        var target = MathF.Abs(raw) < 80f ? 0f : MathF.Round(raw / 25f) * 25f;
+        var target = MathF.Abs(raw) < 60f ? 0f : MathF.Round(raw / 10f) * 10f;
         target = Math.Clamp(target, -ctx.WindowWidth * 0.45f, ctx.WindowWidth * 0.20f);
 
-        if (MathF.Abs(target - _mapViewportCorrectionX) > 75f || target == 0f)
+        var uiShifted = float.IsNaN(_lastMapShiftX) ||
+            MathF.Abs(ctx.Map.ShiftX - _lastMapShiftX) > 2f ||
+            MathF.Abs(ctx.Map.ShiftY - _lastMapShiftY) > 2f;
+
+        _lastMapShiftX = ctx.Map.ShiftX;
+        _lastMapShiftY = ctx.Map.ShiftY;
+
+        if (uiShifted || MathF.Abs(target - _mapViewportCorrectionX) >= 12f || target == 0f)
             _mapViewportCorrectionX = target;
 
         return _mapViewportCorrectionX;
@@ -1222,7 +1515,7 @@ public sealed class OverlayRenderer : IDisposable
         var disposed = new HashSet<nint>();
         foreach (var g in _geoCache.Values) { if (g != null && disposed.Add(g.NativePointer)) g.Dispose(); }
         _geoCache.Clear();
-        _tf?.Dispose(); _tfLandmark?.Dispose(); _tfTransition?.Dispose(); _tfChest?.Dispose(); _tfStatus?.Dispose();
+        _tf?.Dispose(); _tfLandmark?.Dispose(); _tfTransition?.Dispose(); _tfChest?.Dispose(); _tfStatus?.Dispose(); _tfAtlas?.Dispose();
         _terrain?.Dispose();
     }
 }

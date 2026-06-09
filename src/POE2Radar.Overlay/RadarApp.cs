@@ -22,6 +22,7 @@ public sealed class RadarApp : IDisposable
     private readonly ProcessHandle _process;
     private readonly MemoryReader _reader;
     private readonly Poe2Live _live;
+    private readonly Poe2Atlas _atlas;
     private readonly CheatManager _cheats;
     private readonly OverlayWindow _window;
     private readonly OverlayRenderer _renderer;
@@ -74,6 +75,10 @@ public sealed class RadarApp : IDisposable
     private int _charLevel;
     private float[]? _cameraMatrix;
     private bool _overlayVisible = true;
+    private List<Poe2Atlas.AtlasNodeLive> _atlasNodes = new();
+    private readonly object _atlasLock = new();
+    private readonly HashSet<string> _atlasPinned = new(StringComparer.Ordinal);
+    private List<AtlasMark> _atlasMarks = new();
 
     private DateTime _nextCheatKeyAt = DateTime.MinValue;
     private static readonly (int Vk, string Name)[] CheatKeys =
@@ -92,6 +97,7 @@ public sealed class RadarApp : IDisposable
         _process = process;
         _reader = reader;
         _live = new Poe2Live(reader, gameStateSlot);
+        _atlas = new Poe2Atlas(reader);
         _cheats = new CheatManager(process, reader);
         Console.WriteLine("\nScanning cheat patterns...");
         _cheats.ScanAndResolve();
@@ -125,7 +131,8 @@ public sealed class RadarApp : IDisposable
             Console.WriteLine("Inspector disabled: config\\OtIdaOffsets.json not found");
         }
 
-        _api = new ApiServer(() => _state, _watched, _hidden, _radarSettings, _pathing, _autoRules, inspector, _entityNames, _gameData);
+        _api = new ApiServer(() => _state, _watched, _hidden, _radarSettings, _pathing, _autoRules, inspector, _entityNames, _gameData,
+            GetAtlasDashboard, SetAtlasPins);
         try { _api.Start(); Console.WriteLine("API on http://localhost:7777 (/state, /entities, /api/inspect)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
     }
@@ -154,7 +161,10 @@ public sealed class RadarApp : IDisposable
 
         var inGame = _live.TryResolve(out var inGameState, out var areaInstance, out var localPlayer);
         var player = NumVec2.Zero;
+        POE2Radar.Core.Game.Vector3? playerWorld = null;
         var map = default(Poe2Live.MapUi);
+        Poe2Live.AtlasSnapshot? atlas = null;
+        IReadOnlyList<Poe2Atlas.AtlasNodeLive>? atlasNodes = null;
         var areaLevel = 0;
 
         if (inGame)
@@ -163,7 +173,10 @@ public sealed class RadarApp : IDisposable
             _areaHash = _live.AreaHash(areaInstance);
             areaLevel = _live.AreaLevel(areaInstance);
 
-            player = _live.PlayerGrid(localPlayer) ?? NumVec2.Zero;
+            playerWorld = _live.PlayerWorld(localPlayer);
+            player = playerWorld is { } pw
+                ? new NumVec2(pw.X / Poe2.WorldToGridRatio, pw.Y / Poe2.WorldToGridRatio)
+                : _live.PlayerGrid(localPlayer) ?? NumVec2.Zero;
             _exploration.Update(player.X, player.Y, areaInstance);
             map = _live.ReadMap(inGameState, areaInstance);
             _areaCode = _live.AreaCode(areaInstance);
@@ -174,6 +187,18 @@ public sealed class RadarApp : IDisposable
             _charName = _live.PlayerName(localPlayer);
             _charLevel = _live.PlayerLevel(localPlayer);
             _cameraMatrix = _live.CameraMatrix(inGameState);
+            if (_radarSettings.ShowAtlasNodes)
+            {
+                _atlasNodes = _atlas.ReadNodes(inGameState);
+                atlasNodes = _atlasNodes;
+                _atlasMarks = BuildAtlasMarks(_atlasNodes);
+                if (_atlasNodes.Count == 0 && _live.TryReadAtlasSnapshot(inGameState, out var atlasSnapshot))
+                    atlas = atlasSnapshot;
+            }
+            else if (_atlasMarks.Count != 0)
+            {
+                _atlasMarks = new();
+            }
             TickAutoFlask(localPlayer);
 
             var now = DateTime.UtcNow;
@@ -232,8 +257,156 @@ public sealed class RadarApp : IDisposable
             MapPins: _gameData.GetPins(_areaCode),
             GameData: _gameData,
             GameMinimap: _live.GameMinimap,
-            Hidden: _hidden);
+            Hidden: _hidden,
+            PlayerWorld: playerWorld,
+            Atlas: atlas,
+            AtlasNodes: atlasNodes,
+            AtlasMarks: _atlasMarks,
+            AtlasLoadingText: _radarSettings.ShowAtlasNodes && _atlas.LastPanelOpen && _atlas.LoadProgress is > 0f and < 1f
+                ? _atlas.LoadStatus
+                : null,
+            AtlasLoadingProgress: _atlas.LoadProgress);
         _renderer.Render(ctx);
+    }
+
+    private List<AtlasMark> BuildAtlasMarks(IReadOnlyList<Poe2Atlas.AtlasNodeLive> nodes)
+    {
+        if (nodes.Count == 0) return new List<AtlasMark>();
+
+        HashSet<string> pinned;
+        lock (_atlasLock) pinned = new HashSet<string>(_atlasPinned, StringComparer.Ordinal);
+        var track = new HashSet<string>(_radarSettings.AtlasHighlightTags ?? new(), StringComparer.OrdinalIgnoreCase);
+        var arrow = new HashSet<string>(_radarSettings.AtlasArrowTags ?? new(), StringComparer.OrdinalIgnoreCase);
+
+        var marks = new List<AtlasMark>(Math.Min(nodes.Count, 256));
+        foreach (var n in nodes)
+        {
+            var selected = pinned.Contains(AtlasNodeKey(n.Element));
+            var matchedTrack = MatchAtlasRule(track, n);
+            var matchedArrow = MatchAtlasRule(arrow, n);
+            var semantic = InferAtlasSemantic(n);
+            var drawNormalNode = n.Visible;
+            var drawDebugNode = _radarSettings.AtlasDrawAll &&
+                (n.Visible || _radarSettings.AtlasShowHiddenNodes);
+            if (!selected && matchedTrack == null && matchedArrow == null && !drawNormalNode && !drawDebugNode)
+                continue;
+
+            var matched = matchedTrack ?? matchedArrow ?? semantic.Label;
+            var label = matched ?? AtlasNodeLabel(n);
+            var color = selected
+                ? _radarSettings.AtlasWaypointColor
+                : matched != null && _radarSettings.AtlasHighlightColors.TryGetValue(matched, out var configured)
+                    ? configured
+                    : semantic.Color;
+
+            marks.Add(new AtlasMark(
+                n.X, n.Y,
+                Selected: selected || matchedTrack != null,
+                HasContent: n.HasContent,
+                Visited: n.Visited,
+                Unlocked: n.Unlocked,
+                Biome: n.Biome,
+                IconType: n.IconType,
+                Label: label,
+                Color: color,
+                Arrow: (selected && _radarSettings.AtlasShowWaypointArrows) || matchedArrow != null));
+        }
+
+        return marks;
+    }
+
+    private static string? MatchAtlasRule(HashSet<string> rules, in Poe2Atlas.AtlasNodeLive node)
+    {
+        if (rules.Count == 0) return null;
+        if (!string.IsNullOrWhiteSpace(node.MapName) && rules.Contains(node.MapName)) return node.MapName;
+        foreach (var tag in node.Tags)
+            if (rules.Contains(tag)) return tag;
+        return null;
+    }
+
+    private static (string? Label, string Color) InferAtlasSemantic(in Poe2Atlas.AtlasNodeLive node)
+    {
+        string hay = ((node.MapName ?? "") + " " + string.Join(' ', node.Tags)).ToLowerInvariant();
+        if (hay.Contains("citadel")) return ("Citadel", "#e0b341");
+        if (hay.Contains("boss")) return ("Boss", "#ff4040");
+        if (hay.Contains("breach")) return ("Breach", "#b05cff");
+        if (hay.Contains("ritual")) return ("Ritual", "#ff4d6d");
+        if (hay.Contains("delirium")) return ("Delirium", "#c8c8c8");
+        if (hay.Contains("expedition")) return ("Expedition", "#26e6d9");
+        if (hay.Contains("corrupt")) return ("Corrupted", "#ff66ff");
+        if (hay.Contains("tower")) return ("Tower", "#66aaff");
+        if (node.HasContent) return (node.Tags.Count > 0 ? node.Tags[0] : "Content", "#ff9e42");
+        if (node.Visited) return ("Visited", "#ff66ff");
+        return ("Map", "#6ee888");
+    }
+
+    private object GetAtlasDashboard()
+    {
+        HashSet<string> pinned;
+        lock (_atlasLock) pinned = new HashSet<string>(_atlasPinned, StringComparer.Ordinal);
+
+        var nodes = _atlasNodes;
+        return new
+        {
+            open = nodes.Count > 0,
+            total = nodes.Count,
+            pinned = pinned.ToArray(),
+            highlightTags = _radarSettings.AtlasHighlightTags,
+            arrowTags = _radarSettings.AtlasArrowTags,
+            highlightColors = _radarSettings.AtlasHighlightColors,
+            allTags = nodes.SelectMany(n => n.Tags)
+                .GroupBy(t => t, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .Select(g => new { tag = g.Key, count = g.Count() }),
+            allMaps = nodes.Where(n => !string.IsNullOrWhiteSpace(n.MapName))
+                .GroupBy(n => n.MapName, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => g.Key)
+                .Select(g => new { tag = g.Key, count = g.Count() }),
+            nodeList = nodes
+                .OrderByDescending(n => pinned.Contains(AtlasNodeKey(n.Element)))
+                .ThenByDescending(n => n.Visible)
+                .ThenByDescending(n => n.HasContent)
+                .ThenBy(n => AtlasNodeLabel(n))
+                .Take(2000)
+                .Select(n => new
+                {
+                    el = AtlasNodeKey(n.Element),
+                    id = n.Id,
+                    map = n.MapName,
+                    tags = n.Tags,
+                    label = AtlasNodeLabel(n),
+                    visible = n.Visible,
+                    visited = n.Visited,
+                    unlocked = n.Unlocked,
+                    hasContent = n.HasContent,
+                    biome = n.Biome,
+                    icon = n.IconType,
+                    x = (int)n.X,
+                    y = (int)n.Y,
+                    pinned = pinned.Contains(AtlasNodeKey(n.Element)),
+                }),
+        };
+    }
+
+    private void SetAtlasPins(IReadOnlyList<string> pins)
+    {
+        lock (_atlasLock)
+        {
+            _atlasPinned.Clear();
+            foreach (var pin in pins)
+            {
+                if (!string.IsNullOrWhiteSpace(pin))
+                    _atlasPinned.Add(pin.Trim());
+            }
+        }
+    }
+
+    private static string AtlasNodeKey(nint element) => $"0x{element.ToInt64():X}";
+
+    private static string AtlasNodeLabel(Poe2Atlas.AtlasNodeLive node)
+    {
+        if (!string.IsNullOrWhiteSpace(node.MapName)) return node.MapName;
+        return node.Tags.Count > 0 ? node.Tags[0] : $"Node {node.Id}";
     }
 
     private void HandleSettingsToggle()

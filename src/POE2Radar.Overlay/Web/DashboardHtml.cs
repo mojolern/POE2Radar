@@ -67,6 +67,15 @@ tr.watched{background:#2a3a2a}
 .mechanic-row{display:grid;grid-template-columns:90px 64px 94px 52px 110px 72px 1fr;gap:8px;align-items:center;margin-bottom:6px}
 .mechanic-row input[type=text],.mechanic-row select{background:#1e1e28;border:1px solid #444;color:#fff;padding:4px 6px;border-radius:4px;font-size:12px;min-width:0}
 .mechanic-match{font-family:monospace;font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.atlas-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.atlas-toolbar input{background:#1e1e28;border:1px solid #444;color:#fff;padding:5px 8px;border-radius:4px;font-size:13px;min-width:260px}
+.atlas-chip{display:inline-block;padding:1px 6px;border-radius:10px;background:#1e1e28;border:1px solid #444;color:#aaa;font-size:11px;margin:1px 3px 1px 0}
+.atlas-pin{background:#4a3a12;color:#ffd76d}
+.atlas-muted{color:#777;font-size:12px}
+.atlas-rule-row{display:grid;grid-template-columns:44px 44px 42px minmax(160px,1fr) 56px 90px;gap:8px;align-items:center;padding:5px 8px;border-bottom:1px solid #333;font-size:12px}
+.atlas-rule-row button{padding:2px 7px;border:1px solid #555;border-radius:4px;background:#252530;color:#999;cursor:pointer}
+.atlas-rule-row button.on{background:#314d32;color:#9f9;border-color:#5a8}
+.atlas-rule-row button.arrow.on{background:#4a3a12;color:#ffd76d;border-color:#b88}
 @media(max-width:760px){
   .panel.panel-with-rail.active{display:block}
   .action-rail{position:sticky;bottom:8px;top:auto;flex-direction:row;flex-wrap:wrap;margin-top:10px}
@@ -85,6 +94,7 @@ tr.watched{background:#2a3a2a}
   <button class="tab" onclick="showTab('pathing')">Pathing</button>
   <button class="tab" onclick="showTab('minimap')">Minimap</button>
   <button class="tab" onclick="showTab('landmarks')">Landmarks</button>
+  <button class="tab" onclick="showTab('atlas')">Atlas</button>
   <button class="tab" onclick="showTab('gamedata')">Game Data</button>
   <button class="tab" onclick="showTab('hidden')">Hidden</button>
   <button class="tab" onclick="showTab('keybinds')">Keybinds</button>
@@ -233,6 +243,41 @@ tr.watched{background:#2a3a2a}
   </thead><tbody id="lmBody"></tbody></table></div>
 </div>
 
+<!-- ATLAS -->
+<div class="panel" id="tab-atlas">
+  <div class="section">
+    <h3>Atlas Assist</h3>
+    <div id="atlasSettingsBody"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <button class="btn btn-save" onclick="saveAtlasSettings()">Save Atlas Settings</button>
+      <span class="saved" id="atlasSavedMsg">Saved!</span>
+    </div>
+  </div>
+  <div class="atlas-toolbar">
+    <input type="search" id="atlasSearch" placeholder="Search map names or content..." oninput="renderAtlas()">
+    <button class="btn btn-save" onclick="loadAtlas()">Refresh</button>
+    <button class="btn" style="background:#4a3a1a;color:#ffd76d" onclick="clearAtlasPins()">Clear Pins</button>
+    <span id="atlasStatus" class="atlas-muted">Open the Atlas in-game, then refresh.</span>
+  </div>
+  <div class="section">
+    <h3>Ring Rules</h3>
+    <div class="atlas-toolbar">
+      <input type="search" id="atlasRuleSearch" placeholder="Search content/map rule names..." oninput="renderAtlasRules()">
+      <button class="btn" style="background:#5a2a2a;color:#f88" onclick="clearAtlasRules()">Clear Rules</button>
+      <span class="atlas-muted" id="atlasRuleStatus">Rules color rings by map/content type.</span>
+    </div>
+    <div class="scrollbox" style="max-height:260px">
+      <div class="atlas-rule-row" style="position:sticky;top:0;background:#1e1e28;color:#78b4ff;font-weight:bold">
+        <span>Track</span><span>Arrow</span><span>Color</span><span>Name</span><span>Count</span><span>Type</span>
+      </div>
+      <div id="atlasRuleBody"></div>
+    </div>
+  </div>
+  <div class="scrollbox"><table><thead>
+    <tr><th>Map</th><th>Content</th><th>State</th><th>Pos</th><th></th></tr>
+  </thead><tbody id="atlasBody"></tbody></table></div>
+</div>
+
 <!-- DEVTEST -->
 <div class="panel panel-with-rail" id="tab-devtest">
   <div class="panel-main">
@@ -302,9 +347,9 @@ tr.watched{background:#2a3a2a}
 </div>
 
 <script>
-let entities=[],watched=[],landmarks=[],db=[],settings={},catFilter='',dbCatFilter='';
+let entities=[],watched=[],landmarks=[],db=[],settings={},catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set();
 const $=id=>document.getElementById(id);
-const esc=s=>s.replace(/'/g,"\\'").replace(/"/g,'&quot;');
+const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,"\\'").replace(/"/g,'&quot;');
 
 function showTab(name){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -315,6 +360,7 @@ function showTab(name){
   if(name==='rules')refreshRules();
   if(name==='pathing')refreshPathing();
   if(name==='landmarks')refreshLandmarks();
+  if(name==='atlas'){loadAtlasSettings();loadAtlas();}
   if(name==='database'&&db.length===0)loadDb();
   if(name==='settings')loadSettings();
   if(name==='devtest')loadDevTest();
@@ -583,6 +629,49 @@ const settingsDef = [
     {key:'autoLogoutHpThreshold',label:'HP Threshold % (quit at or below)',type:'num',min:5,max:80,step:5},
   ]},
 ];
+
+const atlasSettingsDef = [
+  {key:'showAtlasNodes',label:'Show Atlas Nodes',type:'bool'},
+  {key:'atlasShowLabels',label:'Show Node Labels',type:'bool'},
+  {key:'atlasDrawAll',label:'Draw All Nodes (debug)',type:'bool'},
+  {key:'atlasShowWaypointArrows',label:'Show Off-Screen Waypoint Arrows',type:'bool'},
+  {key:'atlasNodeColor',label:'Debug Node Color',type:'color'},
+  {key:'atlasWaypointColor',label:'Waypoint Color',type:'color'},
+  {key:'atlasNodeDotSize',label:'Debug Node Dot Size',type:'num',min:1,max:12,step:0.5},
+  {key:'atlasLabelFontSize',label:'Node Label Font',type:'num',min:8,max:24,step:1},
+  {key:'atlasLabelOffsetY',label:'Label Offset Y',type:'num',min:-60,max:20,step:1},
+  {key:'atlasScale',label:'Atlas Scale Trim',type:'num',min:0.75,max:1.25,step:0.005},
+  {key:'atlasOffsetX',label:'Atlas Offset X',type:'num',min:-400,max:400,step:1},
+  {key:'atlasOffsetY',label:'Atlas Offset Y',type:'num',min:-400,max:400,step:1},
+];
+
+function renderSettingItem(item){
+  const v=settings[item.key]??'';
+  let html=`<div class="setting-row"><label>${item.label}</label>`;
+  if(item.type==='bool')
+    html+=`<input type="checkbox" ${v?'checked':''} onchange="setSetting('${item.key}',this.checked)">`;
+  else if(item.type==='color')
+    html+=`<input type="color" value="${v}" onchange="setSetting('${item.key}',this.value)">`;
+  else if(item.type==='text')
+    html+=`<input type="text" value="${v||''}" style="width:250px" onchange="setSetting('${item.key}',this.value)" placeholder="e.g. AreaTransition, Waypoint">`;
+  else if(item.type==='num')
+    html+=`<input type="range" min="${item.min}" max="${item.max}" step="${item.step}" value="${v}"
+      oninput="setSetting('${item.key}',parseFloat(this.value));this.nextElementSibling.textContent=this.value">
+      <span class="val">${v}</span>`;
+  html+=`</div>`;
+  return html;
+}
+
+async function loadAtlasSettings(){
+  if(!settings||!Object.keys(settings).length)settings=await(await fetch('/api/settings')).json();
+  const body=$('atlasSettingsBody'); if(!body)return;
+  body.innerHTML=atlasSettingsDef.map(renderSettingItem).join('');
+}
+
+async function saveAtlasSettings(){
+  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});
+  $('atlasSavedMsg').classList.add('show');setTimeout(()=>$('atlasSavedMsg').classList.remove('show'),1500);
+}
 
 async function loadSettings(){
   settings=await(await fetch('/api/settings')).json();
@@ -993,6 +1082,137 @@ function hideFromLandmark(name,path){
   if(pattern===null||!pattern.trim())return;
   fetch('/api/hidden',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pattern:pattern.trim()})})
     .then(()=>{refreshLandmarks();});
+}
+
+// ---- ATLAS WAYPOINTS ----
+async function loadAtlas(){
+  try{
+    atlasData=await(await fetch('/api/atlas')).json();
+    atlasPins=new Set((atlasData.pinned||[]).map(String));
+    syncAtlasRulesFromData();
+    renderAtlas();
+    renderAtlasRules();
+  }catch(ex){
+    $('atlasStatus').textContent='Atlas API error: '+ex.message;
+  }
+}
+function renderAtlas(){
+  const box=$('atlasBody'); if(!box)return;
+  const q=($('atlasSearch')?.value||'').toLowerCase();
+  const nodes=(atlasData&&atlasData.nodeList)||[];
+  const filtered=nodes.filter(n=>{
+    const hay=[n.label,n.map,(n.tags||[]).join(' ')].join(' ').toLowerCase();
+    return !q||hay.includes(q);
+  }).slice(0,600);
+  $('atlasStatus').textContent=atlasData
+    ? `${atlasData.total||0} nodes · ${atlasPins.size} pinned${atlasData.open?'':' · atlas closed/no live nodes'}`
+    : 'Open the Atlas in-game, then refresh.';
+  box.innerHTML=filtered.map(n=>{
+    const pinned=atlasPins.has(String(n.el));
+    const tags=(n.tags||[]).slice(0,4).map(t=>`<span class="atlas-chip">${esc(t)}</span>`).join('');
+    const state=[n.visible?'visible':'hidden',n.visited?'visited':'unvisited',n.unlocked?'unlocked':'locked'].join(' · ');
+    const map=n.map||n.label||('Node '+n.id);
+    return `<tr class="${pinned?'watched':''}">
+      <td><b style="color:${pinned?'#ffd76d':'#fff'}">${esc(map)}</b></td>
+      <td>${tags||'<span class="atlas-muted">none</span>'}</td>
+      <td class="atlas-muted">${state}</td>
+      <td class="atlas-muted">${n.x}, ${n.y}</td>
+      <td><button class="btn ${pinned?'btn-rm':'atlas-pin'}" onclick="toggleAtlasPin('${n.el}')">${pinned?'Unpin':'Pin'}</button></td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="5" class="atlas-muted">No matching Atlas nodes. Open the Atlas in-game and refresh.</td></tr>';
+}
+async function toggleAtlasPin(el){
+  el=String(el);
+  if(atlasPins.has(el))atlasPins.delete(el);else atlasPins.add(el);
+  await postAtlasPins();
+  renderAtlas();
+}
+async function clearAtlasPins(){
+  atlasPins.clear();
+  await postAtlasPins();
+  renderAtlas();
+}
+async function postAtlasPins(){
+  await fetch('/api/atlas-pins',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pins:[...atlasPins]})});
+}
+function syncAtlasRulesFromData(){
+  settings.atlasHighlightTags=(atlasData.highlightTags||settings.atlasHighlightTags||[]).slice();
+  settings.atlasArrowTags=(atlasData.arrowTags||settings.atlasArrowTags||[]).slice();
+  settings.atlasHighlightColors=atlasData.highlightColors||settings.atlasHighlightColors||{};
+}
+function atlasRuleRows(){
+  const rows=[];
+  (atlasData?.allMaps||[]).forEach(x=>rows.push({title:x.tag,count:x.count,type:'Map'}));
+  (atlasData?.allTags||[]).forEach(x=>rows.push({title:x.tag,count:x.count,type:'Content'}));
+  return rows;
+}
+function defaultAtlasRuleColor(title,type){
+  const s=String(title||'').toLowerCase();
+  if(s.includes('citadel'))return'#e0b341';
+  if(s.includes('boss'))return'#ff4040';
+  if(s.includes('breach'))return'#b05cff';
+  if(s.includes('ritual'))return'#ff4d6d';
+  if(s.includes('delirium'))return'#c8c8c8';
+  if(s.includes('expedition'))return'#26e6d9';
+  if(s.includes('corrupt'))return'#ff66ff';
+  if(s.includes('tower'))return'#66aaff';
+  return type==='Map'?'#6ee888':'#ff9e42';
+}
+function renderAtlasRules(){
+  const box=$('atlasRuleBody'); if(!box)return;
+  const q=($('atlasRuleSearch')?.value||'').toLowerCase();
+  const track=new Set((settings.atlasHighlightTags||[]).map(x=>x.toLowerCase()));
+  const arrows=new Set((settings.atlasArrowTags||[]).map(x=>x.toLowerCase()));
+  const colors=settings.atlasHighlightColors||(settings.atlasHighlightColors={});
+  const rows=atlasRuleRows().filter(r=>!q||r.title.toLowerCase().includes(q)).slice(0,500);
+  $('atlasRuleStatus').textContent=`${settings.atlasHighlightTags?.length||0} tracked · ${settings.atlasArrowTags?.length||0} arrows`;
+  box.innerHTML=rows.map(r=>{
+    const key=r.title.toLowerCase();
+    const tr=track.has(key), ar=arrows.has(key);
+    const col=colors[r.title]||defaultAtlasRuleColor(r.title,r.type);
+    return `<div class="atlas-rule-row">
+      <button class="${tr?'on':''}" onclick="toggleAtlasRule('${esc(r.title)}','track')">${tr?'On':'Off'}</button>
+      <button class="arrow ${ar?'on':''}" onclick="toggleAtlasRule('${esc(r.title)}','arrow')">${ar?'On':'Off'}</button>
+      <input type="color" value="${col}" onchange="setAtlasRuleColor('${esc(r.title)}',this.value)">
+      <span title="${esc(r.title)}">${esc(r.title)}</span>
+      <span class="atlas-muted">${r.count}</span>
+      <span class="atlas-muted">${r.type}</span>
+    </div>`;
+  }).join('')||'<div class="atlas-muted" style="padding:8px">No live Atlas rule candidates yet.</div>';
+}
+async function toggleAtlasRule(title,kind){
+  settings.atlasHighlightTags=settings.atlasHighlightTags||[];
+  settings.atlasArrowTags=settings.atlasArrowTags||[];
+  settings.atlasHighlightColors=settings.atlasHighlightColors||{};
+  const arr=kind==='arrow'?settings.atlasArrowTags:settings.atlasHighlightTags;
+  const i=arr.findIndex(x=>x.toLowerCase()===title.toLowerCase());
+  if(i>=0)arr.splice(i,1);else arr.push(title);
+  if(!settings.atlasHighlightColors[title])settings.atlasHighlightColors[title]=defaultAtlasRuleColor(title,'Content');
+  settings.atlasRulesInitialized=true;
+  await saveAtlasRuleSettings();
+  renderAtlasRules();
+}
+async function setAtlasRuleColor(title,color){
+  settings.atlasHighlightColors=settings.atlasHighlightColors||{};
+  settings.atlasHighlightColors[title]=color;
+  settings.atlasRulesInitialized=true;
+  await saveAtlasRuleSettings();
+}
+async function clearAtlasRules(){
+  settings.atlasHighlightTags=[];
+  settings.atlasArrowTags=[];
+  settings.atlasHighlightColors={};
+  settings.atlasRulesInitialized=true;
+  await saveAtlasRuleSettings();
+  renderAtlasRules();
+}
+async function saveAtlasRuleSettings(){
+  await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    atlasHighlightTags:settings.atlasHighlightTags||[],
+    atlasArrowTags:settings.atlasArrowTags||[],
+    atlasHighlightColors:settings.atlasHighlightColors||{},
+    atlasRulesInitialized:settings.atlasRulesInitialized||false
+  })});
 }
 
 function inspectFromList(addr){

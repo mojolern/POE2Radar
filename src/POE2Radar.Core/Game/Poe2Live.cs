@@ -38,6 +38,7 @@ public sealed class Poe2Live
     // Reused camera-matrix buffers (read every render frame).
     private readonly byte[] _camBytes = new byte[64];
     private readonly float[] _camMatrix = new float[16];
+    private readonly byte[] _atlasElementBytes = new byte[0x360];
 
     // Persistent entity cache: remembers positions of important entities (transitions, NPCs, etc.)
     // so they stay visible on the radar after leaving the network bubble. Keyed by entity ID.
@@ -75,6 +76,39 @@ public sealed class Poe2Live
 
     public readonly record struct MapUi(bool IsVisible, float ShiftX, float ShiftY, float Zoom);
     public readonly record struct MinimapUi(bool Available, float ShiftX, float ShiftY, float Zoom);
+    public readonly record struct AtlasRect(float L, float T, float R, float B)
+    {
+        public float Width => R - L;
+        public float Height => B - T;
+        public bool Contains(System.Numerics.Vector2 p) => p.X >= L && p.X <= R && p.Y >= T && p.Y <= B;
+    }
+    public readonly record struct AtlasNode(
+        nint Element,
+        System.Numerics.Vector2 Position,
+        AtlasRect LocalRect,
+        AtlasRect DisplayRect,
+        bool InClip,
+        long ChildCount,
+        bool UiVisible,
+        string Name = "")
+    {
+        public System.Numerics.Vector2 Size => new(LocalRect.Width, LocalRect.Height);
+        public System.Numerics.Vector2 Center => Position + new System.Numerics.Vector2(
+            (LocalRect.L + LocalRect.R) * 0.5f,
+            (LocalRect.T + LocalRect.B) * 0.5f);
+        public System.Numerics.Vector2 DisplayCenter => new(
+            (DisplayRect.L + DisplayRect.R) * 0.5f,
+            (DisplayRect.T + DisplayRect.B) * 0.5f);
+    }
+    public sealed record AtlasSnapshot(
+        bool IsVisible,
+        nint Panel,
+        nint NodeLayer,
+        float Zoom,
+        AtlasRect LocalRect,
+        AtlasRect ClientRect,
+        AtlasRect ClipRect,
+        IReadOnlyList<AtlasNode> Nodes);
 
     /// <summary>A static tile-based landmark: a notable terrain feature and its grid centroid.</summary>
     public readonly record struct Landmark(string Name, string Path, System.Numerics.Vector2 Center, int TileCount);
@@ -162,6 +196,9 @@ public sealed class Poe2Live
 
     /// <summary>Player grid position (from the Render component's world position ÷ grid ratio).</summary>
     public System.Numerics.Vector2? PlayerGrid(nint localPlayer) => EntityGrid(localPlayer);
+
+    /// <summary>Fresh local-player world position for per-frame camera/map alignment.</summary>
+    public Vector3? PlayerWorld(nint localPlayer) => EntityWorld(localPlayer);
 
     public readonly record struct Vitals(int HpCur, int HpUnreserved, int ManaCur, int ManaUnreserved, int EsCur, int EsUnreserved)
     {
@@ -803,6 +840,77 @@ public sealed class Poe2Live
         return (flags & (1u << Poe2.UiElement.FlagVisibleBit)) != 0;
     }
 
+    public bool TryReadAtlasSnapshot(nint inGameState, out AtlasSnapshot snapshot)
+    {
+        snapshot = new AtlasSnapshot(false, 0, 0, 1f, default, default, default, Array.Empty<AtlasNode>());
+
+        var uiRoot = Ptr(inGameState + Poe2.InGameState.UiRoot);
+        if (uiRoot == 0) return false;
+
+        var rootChildren = ReadUiChildren(uiRoot, 256);
+        if (Poe2.AtlasUi.RootChildIndex < 0 || Poe2.AtlasUi.RootChildIndex >= rootChildren.Count)
+            return false;
+
+        var atlasPanel = rootChildren[Poe2.AtlasUi.RootChildIndex];
+        if (atlasPanel == 0) return false;
+
+        if (!IsVisible(atlasPanel))
+        {
+            snapshot = new AtlasSnapshot(false, atlasPanel, 0, 1f, default, default, default, Array.Empty<AtlasNode>());
+            return true;
+        }
+
+        var local = TryReadAtlasRect(atlasPanel + Poe2.AtlasUi.LocalRect, out var localRect) ? localRect : default;
+        var client = TryReadAtlasRect(atlasPanel + Poe2.AtlasUi.PanelClient, out var clientRect) ? clientRect : default;
+        var clip = TryReadAtlasRect(atlasPanel + Poe2.AtlasUi.PanelClip, out var clipRect) ? clipRect : default;
+
+        var elements = WalkUiSubtree(atlasPanel, 12000, out var parents);
+        var candidates = new List<(nint Element, nint Parent, AtlasRect Rect, long Children, bool UiVisible)>();
+        foreach (var el in elements)
+        {
+            if (!parents.TryGetValue(el, out var parent) || parent == 0) continue;
+            if (!TryReadAtlasRect(el + Poe2.AtlasUi.LocalRect, out var rect)) continue;
+            if (!LooksLikeAtlasNodeRect(rect)) continue;
+            candidates.Add((el, parent, rect, TryGetUiChildCount(el), IsVisible(el)));
+        }
+
+        var layer = candidates
+            .GroupBy(x => x.Parent)
+            .Select(g => new { Parent = g.Key, Count = g.Count(), Children = TryGetUiChildCount(g.Key) })
+            .OrderByDescending(x => x.Count)
+            .ThenByDescending(x => x.Children)
+            .FirstOrDefault();
+
+        if (layer == null)
+        {
+            snapshot = new AtlasSnapshot(true, atlasPanel, 0, 1f, local, client, clip, Array.Empty<AtlasNode>());
+            return true;
+        }
+
+        var zoom = TryReadFloat(layer.Parent + Poe2.AtlasUi.LayerZoom, out var layerZoom) &&
+            layerZoom is >= 0.05f and <= 8f
+            ? layerZoom
+            : 1f;
+
+        var nodes = new List<AtlasNode>(Math.Min(layer.Count, 2048));
+        foreach (var c in candidates.Where(x => x.Parent == layer.Parent))
+        {
+            if (!TryReadFloat(c.Element + Poe2.AtlasUi.NodePosition, out var x) ||
+                !TryReadFloat(c.Element + Poe2.AtlasUi.NodePosition + 4, out var y))
+                continue;
+
+            var pos = new System.Numerics.Vector2(x, y);
+            var center = pos + new System.Numerics.Vector2(
+                (c.Rect.L + c.Rect.R) * 0.5f,
+                (c.Rect.T + c.Rect.B) * 0.5f);
+            var display = TryReadAtlasRect(c.Element + Poe2.AtlasUi.PanelClient, out var displayRect) ? displayRect : default;
+            nodes.Add(new AtlasNode(c.Element, pos, c.Rect, display, clip.Contains(center), c.Children, c.UiVisible));
+        }
+
+        snapshot = new AtlasSnapshot(true, atlasPanel, layer.Parent, zoom, local, client, clip, nodes);
+        return true;
+    }
+
     // ── internals ───────────────────────────────────────────────────────────
 
     private Vector3? EntityWorld(nint entity)
@@ -951,6 +1059,81 @@ public sealed class Poe2Live
         meta.Contains("Invisible", StringComparison.Ordinal);
 
     /// <summary>Resolve a component address by name via EntityDetails → ComponentLookUp (StdBucket) → ComponentList.</summary>
+    private List<nint> ReadUiChildren(nint element, int maxChildren)
+    {
+        var result = new List<nint>();
+        var first = Ptr(element + Poe2.UiElement.Children);
+        if (first == 0) return result;
+        if (!_reader.TryReadStruct<nint>(element + Poe2.UiElement.Children + 8, out var last)) return result;
+        var count = ((long)last - (long)first) / 8;
+        if (count <= 0 || count > maxChildren) return result;
+        for (long i = 0; i < count; i++)
+        {
+            var child = Ptr(first + (nint)(i * 8));
+            if (child != 0) result.Add(child);
+        }
+        return result;
+    }
+
+    private long TryGetUiChildCount(nint element)
+    {
+        var first = Ptr(element + Poe2.UiElement.Children);
+        if (first == 0) return 0;
+        if (!_reader.TryReadStruct<nint>(element + Poe2.UiElement.Children + 8, out var last)) return 0;
+        var count = ((long)last - (long)first) / 8;
+        return count is >= 0 and <= 100000 ? count : 0;
+    }
+
+    private List<nint> WalkUiSubtree(nint root, int maxElements, out Dictionary<nint, nint> parents)
+    {
+        var result = new List<nint>();
+        parents = new Dictionary<nint, nint> { [root] = 0 };
+        var queue = new Queue<nint>();
+        var visited = new HashSet<nint>();
+        queue.Enqueue(root);
+        while (queue.Count > 0 && result.Count < maxElements)
+        {
+            var el = queue.Dequeue();
+            if (el == 0 || !visited.Add(el)) continue;
+            result.Add(el);
+            var children = ReadUiChildren(el, 8192);
+            foreach (var child in children)
+            {
+                if (child == 0) continue;
+                parents.TryAdd(child, el);
+                queue.Enqueue(child);
+            }
+        }
+        return result;
+    }
+
+    private bool TryReadAtlasRect(nint addr, out AtlasRect rect)
+    {
+        rect = default;
+        if (_reader.TryReadBytes(addr, _atlasElementBytes.AsSpan(0, 16)) != 16)
+            return false;
+        var l = BitConverter.ToSingle(_atlasElementBytes, 0);
+        var t = BitConverter.ToSingle(_atlasElementBytes, 4);
+        var r = BitConverter.ToSingle(_atlasElementBytes, 8);
+        var b = BitConverter.ToSingle(_atlasElementBytes, 12);
+        if (!float.IsFinite(l) || !float.IsFinite(t) || !float.IsFinite(r) || !float.IsFinite(b))
+            return false;
+        rect = new AtlasRect(l, t, r, b);
+        return true;
+    }
+
+    private bool TryReadFloat(nint addr, out float value)
+    {
+        value = 0f;
+        if (!_reader.TryReadStruct<float>(addr, out var v) || !float.IsFinite(v))
+            return false;
+        value = v;
+        return true;
+    }
+
+    private static bool LooksLikeAtlasNodeRect(AtlasRect rect)
+        => rect.Width is >= 6f and <= 180f && rect.Height is >= 6f and <= 180f;
+
     private nint ResolveComponent(nint entity, string name)
     {
         var details = Ptr(entity + Poe2.Entity.EntityDetailsPtr);

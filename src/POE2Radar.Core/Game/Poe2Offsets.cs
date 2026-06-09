@@ -361,4 +361,16 @@ public static class Poe2
         // TODO: Position/Size offsets needed for pixel-perfect minimap overlay alignment.
         // Need to probe a known UiElement with CE to find screen rect floats.
     }
+
+    /// <summary>Atlas/World Map UI fields discovered live by POE2Radar.Research --atlas-probe.</summary>
+    public static class AtlasUi
+    {
+        public const int RootChildIndex = 22;    // UiRoot.Children[22] toggles with Atlas open/closed.
+        public const int CombinedScale  = 0x0F0; // float; Atlas panel UI scale, node layer = UI scale * Atlas zoom.
+        public const int NodePosition   = 0x118; // float2; pan-adjusted node position within the Atlas layer.
+        public const int LayerZoom      = 0x130; // float; live Atlas zoom on the dominant node layer.
+        public const int LocalRect      = 0x280; // float4; local element bounds, e.g. node icon 40x40.
+        public const int PanelClient    = 0x330; // float4; panel client/display bounds candidate.
+        public const int PanelClip      = 0x340; // float4; Atlas content clip rect, usually 16,26 -> 2544,1574.
+    }
 }

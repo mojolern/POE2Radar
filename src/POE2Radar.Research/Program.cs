@@ -39,6 +39,21 @@ if (HasFlag(args, "--find-terrain"))
 if (HasFlag(args, "--find-map"))
     return RunFindMap(process, reader);
 
+if (HasFlag(args, "--atlas-probe"))
+    return RunAtlasProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--atlas-child") ?? 22,
+        TryGetIntArg(args, "--atlas-max") ?? 60000,
+        TryGetIntArg(args, "--atlas-samples") ?? 60,
+        TryGetHexArg(args, "--atlas-dump-node") ?? 0);
+
+if (HasFlag(args, "--atlas-snapshot"))
+    return RunAtlasSnapshot(process, reader, TryGetIntArg(args, "--atlas-samples") ?? 40);
+
+if (HasFlag(args, "--atlas-rect-scan"))
+    return RunAtlasRectScan(process, reader, TryGetIntArg(args, "--atlas-samples") ?? 80);
+
 if (HasFlag(args, "--watch"))
     return RunWatch(process, reader);
 
@@ -73,6 +88,9 @@ Console.WriteLine("  --dump <hexAddr> [--dump-len <N>]   hex-dump a region for i
 Console.WriteLine("  --dump <hexAddr> [--dump-len <N>]   hex-dump a region for inspection");
 Console.WriteLine("  --entity <hexAddr>         walk a PoE2 entity: id, metadata path, component map, Render→grid, Life");
 Console.WriteLine("  --aob                      scan for IngameState via AOB patterns");
+Console.WriteLine("  --atlas-probe [--atlas-child N] [--atlas-dump-node 0xADDR]  discover Atlas panel/node UI candidates");
+Console.WriteLine("  --atlas-snapshot [--atlas-samples N]  validate the Core Atlas snapshot reader");
+Console.WriteLine("  --atlas-rect-scan [--atlas-samples N]  scan Atlas nodes for final screen/client rect offsets");
 return 0;
 
 // ── PoE2 entity / component-map probe ──────────────────────────────────────
@@ -605,6 +623,243 @@ static int RunFindMap(ProcessHandle process, MemoryReader reader)
 // active InGameState. InGameState+0x290 → AreaInstance. AreaInstance+0x5A0 → LocalPlayer.
 // Validated live (resolved LocalPlayer == the value-scanned player entity). Falls back to
 // scanning the 12 States[] slots if the current-state vector doesn't validate.
+static int RunAtlasSnapshot(ProcessHandle process, MemoryReader reader, int sampleCount)
+{
+    var (_, inGameState, _, _) = ResolveChain(process, reader);
+    if (inGameState == 0) { Console.Error.WriteLine("Could not resolve chain (are you in game?)."); return 1; }
+
+    var live = new Poe2Live(reader, 0);
+    if (!live.TryReadAtlasSnapshot(inGameState, out var atlas))
+    {
+        Console.Error.WriteLine("Could not read Atlas snapshot.");
+        return 1;
+    }
+
+    Console.WriteLine($"Atlas visible : {atlas.IsVisible}");
+    Console.WriteLine($"Panel         : 0x{atlas.Panel:X16}");
+    Console.WriteLine($"Node layer    : 0x{atlas.NodeLayer:X16}");
+    Console.WriteLine($"Layer zoom    : {atlas.Zoom:F4}");
+    Console.WriteLine($"Local rect    : ({atlas.LocalRect.L:F1},{atlas.LocalRect.T:F1})-({atlas.LocalRect.R:F1},{atlas.LocalRect.B:F1}) size=({atlas.LocalRect.Width:F1}x{atlas.LocalRect.Height:F1})");
+    Console.WriteLine($"Client rect   : ({atlas.ClientRect.L:F1},{atlas.ClientRect.T:F1})-({atlas.ClientRect.R:F1},{atlas.ClientRect.B:F1}) size=({atlas.ClientRect.Width:F1}x{atlas.ClientRect.Height:F1})");
+    Console.WriteLine($"Clip rect     : ({atlas.ClipRect.L:F1},{atlas.ClipRect.T:F1})-({atlas.ClipRect.R:F1},{atlas.ClipRect.B:F1}) size=({atlas.ClipRect.Width:F1}x{atlas.ClipRect.Height:F1})");
+    Console.WriteLine($"Nodes         : {atlas.Nodes.Count} total, {atlas.Nodes.Count(n => n.InClip)} inside clip");
+
+    Console.WriteLine("Sample nodes:");
+    foreach (var n in atlas.Nodes
+        .OrderByDescending(n => n.InClip)
+        .ThenBy(n => n.Position.Y)
+        .ThenBy(n => n.Position.X)
+        .Take(sampleCount))
+    {
+        var center = n.Position + (n.Size * 0.5f);
+        Console.WriteLine($"  0x{n.Element:X16} pos=({n.Position.X,10:F1},{n.Position.Y,10:F1}) center=({center.X,10:F1},{center.Y,10:F1}) size=({n.Size.X,5:F1}x{n.Size.Y,5:F1}) inClip={n.InClip,-5} children={n.ChildCount,4}");
+    }
+
+    return 0;
+}
+
+static int RunAtlasRectScan(ProcessHandle process, MemoryReader reader, int sampleCount)
+{
+    var (_, inGameState, _, _) = ResolveChain(process, reader);
+    if (inGameState == 0) { Console.Error.WriteLine("Could not resolve chain (are you in game?)."); return 1; }
+
+    TryGetClientSize(out var winW, out var winH);
+    var live = new Poe2Live(reader, 0);
+    if (!live.TryReadAtlasSnapshot(inGameState, out var atlas) || !atlas.IsVisible)
+    {
+        Console.Error.WriteLine("Atlas snapshot is not visible. Open the Atlas before running this probe.");
+        return 1;
+    }
+
+    var nodes = atlas.Nodes
+        .Where(n => n.UiVisible && n.InClip)
+        .OrderBy(n => n.Position.Y)
+        .ThenBy(n => n.Position.X)
+        .Take(sampleCount)
+        .ToList();
+
+    Console.WriteLine($"Window/client : {winW}x{winH}");
+    Console.WriteLine($"Atlas panel   : 0x{atlas.Panel:X16}");
+    Console.WriteLine($"Node layer    : 0x{atlas.NodeLayer:X16}");
+    Console.WriteLine($"Layer zoom    : {atlas.Zoom:F4}");
+    Console.WriteLine($"Nodes scanned : {nodes.Count} visible/in-clip of {atlas.Nodes.Count} total");
+    Console.WriteLine("Goal          : find the ExileMaps-style final node GetClientRect equivalent.");
+    Console.WriteLine();
+
+    var groups = new Dictionary<int, List<(float L, float T, float R, float B)>>();
+    var body = new byte[0x600];
+    foreach (var node in nodes)
+    {
+        var read = reader.TryReadBytes(node.Element, body);
+        if (read < 0x80) continue;
+        for (var off = 0x20; off + 16 <= read; off += 4)
+        {
+            var l = BitConverter.ToSingle(body, off);
+            var t = BitConverter.ToSingle(body, off + 4);
+            var r = BitConverter.ToSingle(body, off + 8);
+            var b = BitConverter.ToSingle(body, off + 12);
+            if (!LooksLikeFinalAtlasNodeRect(l, t, r, b, winW, winH)) continue;
+            if (!groups.TryGetValue(off, out var values))
+                groups[off] = values = new List<(float L, float T, float R, float B)>();
+            values.Add((l, t, r, b));
+        }
+    }
+
+    Console.WriteLine("Common final-screen rect candidates:");
+    foreach (var g in groups
+        .Select(g =>
+        {
+            var rects = g.Value;
+            var xs = rects.Select(r => (r.L + r.R) * 0.5f).ToArray();
+            var ys = rects.Select(r => (r.T + r.B) * 0.5f).ToArray();
+            var ws = rects.Select(r => r.R - r.L).ToArray();
+            var hs = rects.Select(r => r.B - r.T).ToArray();
+            return new
+            {
+                Offset = g.Key,
+                Count = rects.Count,
+                Spread = (xs.Max() - xs.Min()) + (ys.Max() - ys.Min()),
+                MinX = xs.Min(),
+                MaxX = xs.Max(),
+                MinY = ys.Min(),
+                MaxY = ys.Max(),
+                AvgW = ws.Average(),
+                AvgH = hs.Average()
+            };
+        })
+        .Where(x => x.Count >= Math.Max(5, nodes.Count / 3) && x.Spread > 120f)
+        .OrderByDescending(x => x.Count)
+        .ThenByDescending(x => x.Spread)
+        .Take(20))
+    {
+        Console.WriteLine($"  +0x{g.Offset:X3}: hits={g.Count,4} spread={g.Spread,8:F1} centerX={g.MinX,8:F1}..{g.MaxX,8:F1} centerY={g.MinY,8:F1}..{g.MaxY,8:F1} avgSize=({g.AvgW:F1}x{g.AvgH:F1})");
+    }
+
+    Console.WriteLine();
+    PrintAtlasTransformScan(reader, atlas.Panel, "panel", winW, winH);
+    PrintAtlasTransformScan(reader, atlas.NodeLayer, "node-layer", winW, winH);
+    foreach (var node in nodes.Take(3))
+        PrintAtlasTransformScan(reader, node.Element, $"node 0x{node.Element:X16}", winW, winH);
+
+    Console.WriteLine();
+    Console.WriteLine("Run this at medium zoom, max zoom-in, and max zoom-out. A true client rect offset should keep centers on-screen and avgSize should change with Atlas zoom.");
+    Console.WriteLine("For ExileCore2-style transform fields, compare panel/node-layer float candidates; the Atlas zoom field should change across runs.");
+    return 0;
+}
+
+// Atlas/World Map discovery. This intentionally lives in Research until the
+// live panel/node offsets have been validated across closed/open/panned states.
+static int RunAtlasProbe(ProcessHandle process, MemoryReader reader, int atlasChildIndex, int maxElements, int sampleCount, nint dumpNode)
+{
+    var (_, inGameState, _, _) = ResolveChain(process, reader);
+    if (inGameState == 0) { Console.Error.WriteLine("Could not resolve chain (are you in game?)."); return 1; }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0) { Console.Error.WriteLine("UiRoot is null. Open a character in game first."); return 1; }
+
+    TryGetClientSize(out var winW, out var winH);
+    Console.WriteLine($"UiRoot        : 0x{uiRoot:X16}");
+    Console.WriteLine($"Window/client : {winW}x{winH} (foreground window; rect plausibility only)");
+    Console.WriteLine($"Atlas child   : index {atlasChildIndex} (override with --atlas-child N)");
+    Console.WriteLine();
+
+    var rootChildren = ReadUiChildren(reader, uiRoot, maxChildren: 256);
+    Console.WriteLine($"UiRoot children: {rootChildren.Count}");
+    Console.WriteLine("Top-level child summary:");
+    for (var i = 0; i < Math.Min(rootChildren.Count, 64); i++)
+    {
+        var child = rootChildren[i];
+        Console.WriteLine($"  [{i,2}] 0x{child:X16}  visible={ReadUiVisible(reader, child),-5}  children={TryGetUiChildCount(reader, child),5}  flags=0x{ReadUiFlags(reader, child):X8}");
+    }
+
+    if (atlasChildIndex < 0 || atlasChildIndex >= rootChildren.Count)
+    {
+        Console.Error.WriteLine($"\nAtlas child index {atlasChildIndex} is outside the root child list.");
+        return 1;
+    }
+
+    var atlasPanel = rootChildren[atlasChildIndex];
+    var atlasVisible = ReadUiVisible(reader, atlasPanel);
+    Console.WriteLine($"\nAtlas panel candidate: 0x{atlasPanel:X16}");
+    Console.WriteLine($"  Visible bit @ UiElement+0x{Poe2.UiElement.Flags:X} bit {Poe2.UiElement.FlagVisibleBit}: {atlasVisible}");
+    Console.WriteLine($"  Child count: {TryGetUiChildCount(reader, atlasPanel)}");
+
+    if (!atlasVisible)
+    {
+        Console.WriteLine("\nAtlas appears closed. This is the desired cheap gate: do not scan node UI while closed.");
+        Console.WriteLine("Open the Atlas/World Map and run the same command again to discover node candidates.");
+        return 0;
+    }
+
+    var uiElements = WalkUiSubtree(reader, atlasPanel, maxElements, out var parents, out var childIndexes);
+    Console.WriteLine($"\nWalked Atlas subtree: {uiElements.Count} UI elements (limit {maxElements})");
+
+    var rectHits = new List<(nint Element, int Offset, float L, float T, float R, float B, long Children, bool Visible)>();
+    var body = new byte[0x360];
+    foreach (var el in uiElements)
+    {
+        var read = reader.TryReadBytes(el, body);
+        if (read < 0x80) continue;
+        for (var off = 0x20; off + 16 <= read; off += 4)
+        {
+            var l = BitConverter.ToSingle(body, off);
+            var t = BitConverter.ToSingle(body, off + 4);
+            var r = BitConverter.ToSingle(body, off + 8);
+            var b = BitConverter.ToSingle(body, off + 12);
+            if (!LooksLikeRect(l, t, r, b, winW, winH)) continue;
+            rectHits.Add((el, off, l, t, r, b, TryGetUiChildCount(reader, el), ReadUiVisible(reader, el)));
+        }
+    }
+
+    Console.WriteLine("\nRect-like fields grouped by offset:");
+    foreach (var g in rectHits.GroupBy(x => x.Offset).OrderByDescending(g => g.Count()).Take(20))
+    {
+        var nodeish = g.Count(x => IsNodeSized(x.L, x.T, x.R, x.B));
+        var sample = g.First();
+        Console.WriteLine($"  +0x{g.Key:X3}: hits={g.Count(),5}  node-sized={nodeish,5}  sample=({sample.L:F0},{sample.T:F0})-({sample.R:F0},{sample.B:F0})");
+    }
+
+    var best = rectHits
+        .GroupBy(x => x.Offset)
+        .Select(g => new { Offset = g.Key, NodeSized = g.Count(x => IsNodeSized(x.L, x.T, x.R, x.B)), Total = g.Count() })
+        .OrderByDescending(x => x.NodeSized)
+        .ThenByDescending(x => x.Total)
+        .FirstOrDefault();
+    if (best == null || best.Total == 0)
+    {
+        Console.WriteLine("\nNo plausible rect fields found. Try opening the Atlas, panning it into view, or increasing --atlas-max.");
+        return 0;
+    }
+
+    var nodeCandidates = rectHits
+        .Where(x => x.Offset == best.Offset && IsNodeSized(x.L, x.T, x.R, x.B))
+        .OrderBy(x => x.T)
+        .ThenBy(x => x.L)
+        .ToList();
+
+    Console.WriteLine($"\nBest node-rect offset candidate: +0x{best.Offset:X3} ({best.NodeSized} node-sized / {best.Total} total)");
+    Console.WriteLine("Sample node-like elements:");
+    foreach (var h in nodeCandidates.Take(sampleCount))
+    {
+        var cx = (h.L + h.R) * 0.5f;
+        var cy = (h.T + h.B) * 0.5f;
+        Console.WriteLine($"  0x{h.Element:X16} vis={h.Visible,-5} children={h.Children,3} rect=({h.L,7:F1},{h.T,7:F1})-({h.R,7:F1},{h.B,7:F1}) center=({cx,7:F1},{cy,7:F1}) size=({h.R - h.L,5:F1}x{h.B - h.T,5:F1})");
+    }
+
+    PrintAtlasCoordinateCandidates(reader, atlasPanel, nodeCandidates, parents, sampleCount);
+    PrintAtlasPointCandidateSummary(reader, nodeCandidates.Select(x => x.Element).Distinct().Take(Math.Max(sampleCount, 80)), winW, winH);
+
+    if (dumpNode != 0)
+        DumpAtlasNodeAncestry(reader, dumpNode, parents, childIndexes, winW, winH);
+
+    Console.WriteLine("\nValidation flow:");
+    Console.WriteLine("  closed: --atlas-probe");
+    Console.WriteLine("  open  : --atlas-probe");
+    Console.WriteLine("  panned: --atlas-probe --atlas-dump-node 0xADDR");
+    Console.WriteLine("Stable child index + rect offset are the first two offsets needed for Atlas Assist rendering.");
+    return 0;
+}
+
 static (nint gameState, nint inGameState, nint areaInstance, nint localPlayer) ResolveChain(
     ProcessHandle process, MemoryReader reader)
 {
@@ -742,6 +997,403 @@ static void WalkEntityMap(MemoryReader reader, nint head, int size)
 
 // Safe pointer read — returns 0 on any failure (never throws). Also rejects obviously-bad
 // pointers (non-canonical / low addresses) so garbage from a wrong chain branch can't propagate.
+static List<nint> ReadUiChildren(MemoryReader reader, nint element, int maxChildren)
+{
+    var result = new List<nint>();
+    var first = SafePtr(reader, element + Poe2.UiElement.Children);
+    if (first == 0) return result;
+    if (!reader.TryReadStruct<nint>(element + Poe2.UiElement.Children + 8, out var last)) return result;
+    var count = ((long)last - (long)first) / 8;
+    if (count <= 0 || count > maxChildren) return result;
+    for (long i = 0; i < count; i++)
+    {
+        var child = SafePtr(reader, first + (nint)(i * 8));
+        if (child != 0) result.Add(child);
+    }
+    return result;
+}
+
+static long TryGetUiChildCount(MemoryReader reader, nint element)
+{
+    var first = SafePtr(reader, element + Poe2.UiElement.Children);
+    if (first == 0) return 0;
+    if (!reader.TryReadStruct<nint>(element + Poe2.UiElement.Children + 8, out var last)) return 0;
+    var count = ((long)last - (long)first) / 8;
+    return count is >= 0 and <= 100000 ? count : 0;
+}
+
+static uint ReadUiFlags(MemoryReader reader, nint element)
+    => reader.TryReadStruct<uint>(element + Poe2.UiElement.Flags, out var flags) ? flags : 0;
+
+static bool ReadUiVisible(MemoryReader reader, nint element)
+    => (ReadUiFlags(reader, element) & (1u << Poe2.UiElement.FlagVisibleBit)) != 0;
+
+static List<nint> WalkUiSubtree(
+    MemoryReader reader,
+    nint root,
+    int maxElements,
+    out Dictionary<nint, nint> parents,
+    out Dictionary<nint, int> childIndexes)
+{
+    var result = new List<nint>();
+    parents = new Dictionary<nint, nint> { [root] = 0 };
+    childIndexes = new Dictionary<nint, int> { [root] = -1 };
+    var queue = new Queue<nint>();
+    var visited = new HashSet<nint>();
+    queue.Enqueue(root);
+    while (queue.Count > 0 && result.Count < maxElements)
+    {
+        var el = queue.Dequeue();
+        if (el == 0 || !visited.Add(el)) continue;
+        result.Add(el);
+        var children = ReadUiChildren(reader, el, maxChildren: 8192);
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            if (child == 0) continue;
+            parents.TryAdd(child, el);
+            childIndexes.TryAdd(child, i);
+            queue.Enqueue(child);
+        }
+    }
+    return result;
+}
+
+static void PrintAtlasPointCandidateSummary(MemoryReader reader, IEnumerable<nint> elements, int winW, int winH)
+{
+    var groups = new Dictionary<int, List<(float X, float Y)>>();
+    var body = new byte[0x360];
+    var seen = 0;
+
+    foreach (var el in elements)
+    {
+        var read = reader.TryReadBytes(el, body);
+        if (read < 0x80) continue;
+        seen++;
+        for (var off = 0x20; off + 8 <= read; off += 4)
+        {
+            var x = BitConverter.ToSingle(body, off);
+            var y = BitConverter.ToSingle(body, off + 4);
+            if (!LooksLikePoint(x, y, winW, winH)) continue;
+            if (!groups.TryGetValue(off, out var values))
+                groups[off] = values = new List<(float X, float Y)>();
+            values.Add((x, y));
+        }
+    }
+
+    Console.WriteLine("\nPosition-like Vector2 fields across sampled node candidates:");
+    Console.WriteLine("  Re-run after panning the Atlas; real node-position/transform offsets should shift together.");
+    foreach (var g in groups
+        .Select(g =>
+        {
+            var xs = g.Value.Select(v => v.X).ToArray();
+            var ys = g.Value.Select(v => v.Y).ToArray();
+            return new
+            {
+                Offset = g.Key,
+                Count = g.Value.Count,
+                MinX = xs.Min(),
+                MaxX = xs.Max(),
+                MinY = ys.Min(),
+                MaxY = ys.Max()
+            };
+        })
+        .Where(x => x.Count >= Math.Max(4, seen / 6))
+        .OrderByDescending(x => (x.MaxX - x.MinX) + (x.MaxY - x.MinY))
+        .ThenByDescending(x => x.Count)
+        .Take(20))
+    {
+        Console.WriteLine($"  +0x{g.Offset:X3}: hits={g.Count,4}  x={g.MinX,8:F1}..{g.MaxX,8:F1}  y={g.MinY,8:F1}..{g.MaxY,8:F1}  spread={(g.MaxX - g.MinX) + (g.MaxY - g.MinY),8:F1}");
+    }
+}
+
+static void PrintAtlasCoordinateCandidates(
+    MemoryReader reader,
+    nint atlasPanel,
+    IReadOnlyList<(nint Element, int Offset, float L, float T, float R, float B, long Children, bool Visible)> nodeCandidates,
+    Dictionary<nint, nint> parents,
+    int sampleCount)
+{
+    Console.WriteLine("\nAtlas coordinate candidate snapshot:");
+    Console.WriteLine("  Finding: node raw position is the pan-adjusted float2 at +0x118/+0x11C; +0x280 is local icon bounds.");
+    if (TryReadRectAt(reader, atlasPanel, 0x280, out var panelLocal))
+        Console.WriteLine($"  panel local +0x280: ({panelLocal.L:F1},{panelLocal.T:F1})-({panelLocal.R:F1},{panelLocal.B:F1}) size=({panelLocal.R - panelLocal.L:F1}x{panelLocal.B - panelLocal.T:F1})");
+    if (TryReadRectAt(reader, atlasPanel, 0x330, out var panelClient))
+        Console.WriteLine($"  panel client +0x330: ({panelClient.L:F1},{panelClient.T:F1})-({panelClient.R:F1},{panelClient.B:F1}) size=({panelClient.R - panelClient.L:F1}x{panelClient.B - panelClient.T:F1})");
+    if (TryReadRectAt(reader, atlasPanel, 0x340, out var panelClip))
+        Console.WriteLine($"  panel clip  +0x340: ({panelClip.L:F1},{panelClip.T:F1})-({panelClip.R:F1},{panelClip.B:F1}) size=({panelClip.R - panelClip.L:F1}x{panelClip.B - panelClip.T:F1})");
+
+    var parentGroups = nodeCandidates
+        .Where(x => x.Visible && parents.TryGetValue(x.Element, out _))
+        .GroupBy(x => parents[x.Element])
+        .Select(g => new
+        {
+            Parent = g.Key,
+            Count = g.Count(),
+            ParentChildren = TryGetUiChildCount(reader, g.Key),
+            LayerSize = TryReadRectAt(reader, g.Key, 0x280, out var r) ? (W: r.R - r.L, H: r.B - r.T) : (W: 0f, H: 0f)
+        })
+        .OrderByDescending(x => x.Count)
+        .ThenByDescending(x => x.ParentChildren)
+        .Take(8)
+        .ToList();
+
+    Console.WriteLine("  top node parent containers:");
+    foreach (var g in parentGroups)
+        Console.WriteLine($"    parent=0x{g.Parent:X16} visibleNodes={g.Count,5} parentChildren={g.ParentChildren,5} localSize=({g.LayerSize.W:F1}x{g.LayerSize.H:F1})");
+
+    var dominantParent = parentGroups.FirstOrDefault()?.Parent ?? 0;
+    var focused = dominantParent == 0
+        ? nodeCandidates.Where(x => x.Visible)
+        : nodeCandidates.Where(x => x.Visible && parents.TryGetValue(x.Element, out var p) && p == dominantParent);
+
+    Console.WriteLine(dominantParent == 0
+        ? "  visible node samples:"
+        : $"  visible samples under dominant parent 0x{dominantParent:X16}:");
+    foreach (var h in focused.Take(Math.Max(sampleCount, 24)))
+    {
+        if (!TryReadFloat(reader, h.Element + 0x118, out var rawX) ||
+            !TryReadFloat(reader, h.Element + 0x11C, out var rawY))
+            continue;
+
+        var w = h.R - h.L;
+        var height = h.B - h.T;
+        var cx = rawX + (w * 0.5f);
+        var cy = rawY + (height * 0.5f);
+        var inClip = TryReadRectAt(reader, atlasPanel, 0x340, out var clip) &&
+            cx >= clip.L && cx <= clip.R &&
+            cy >= clip.T && cy <= clip.B;
+        Console.WriteLine($"    0x{h.Element:X16} raw118=({rawX,10:F1},{rawY,10:F1}) center=({cx,10:F1},{cy,10:F1}) inClip={inClip,-5} localSize=({w,5:F1}x{height,5:F1}) children={h.Children,4}");
+    }
+}
+
+static bool TryReadRectAt(MemoryReader reader, nint element, int offset, out (float L, float T, float R, float B) rect)
+{
+    rect = default;
+    if (!reader.TryReadStruct<float>(element + offset, out var l) ||
+        !reader.TryReadStruct<float>(element + offset + 4, out var t) ||
+        !reader.TryReadStruct<float>(element + offset + 8, out var r) ||
+        !reader.TryReadStruct<float>(element + offset + 12, out var b))
+        return false;
+    if (!float.IsFinite(l) || !float.IsFinite(t) || !float.IsFinite(r) || !float.IsFinite(b))
+        return false;
+    rect = (l, t, r, b);
+    return true;
+}
+
+static bool TryReadFloat(MemoryReader reader, nint addr, out float value)
+{
+    value = 0;
+    if (!reader.TryReadStruct<float>(addr, out var v) || !float.IsFinite(v))
+        return false;
+    value = v;
+    return true;
+}
+
+static void PrintAtlasTransformScan(MemoryReader reader, nint element, string label, int winW, int winH)
+{
+    if (element == 0) return;
+    var body = new byte[0x700];
+    var read = reader.TryReadBytes(element, body);
+    if (read < 0x80) return;
+
+    Console.WriteLine($"Transform scan: {label} @ 0x{element:X16}");
+
+    var floats = new List<(int Off, float Value)>();
+    for (var off = 0x20; off + 4 <= read; off += 4)
+    {
+        var v = BitConverter.ToSingle(body, off);
+        if (!float.IsFinite(v)) continue;
+        if (Math.Abs(v) is < 0.0001f or > 10000f) continue;
+        if (v is >= 0.01f and <= 20f || Math.Abs(v) is >= 20f and <= 5000f)
+            floats.Add((off, v));
+    }
+
+    Console.WriteLine("  scale-like floats:");
+    foreach (var f in floats
+        .Where(x => x.Value is >= 0.05f and <= 8f)
+        .OrderBy(x => x.Off)
+        .Take(48))
+        Console.WriteLine($"    +0x{f.Off:X3}: {f.Value,10:F5}");
+
+    Console.WriteLine("  point-like pairs:");
+    var printedPoints = 0;
+    for (var off = 0x20; off + 8 <= read && printedPoints < 32; off += 4)
+    {
+        var x = BitConverter.ToSingle(body, off);
+        var y = BitConverter.ToSingle(body, off + 4);
+        if (!LooksLikePoint(x, y, winW, winH)) continue;
+        Console.WriteLine($"    +0x{off:X3}: ({x,10:F2},{y,10:F2})");
+        printedPoints++;
+    }
+
+    Console.WriteLine("  rect-like fields:");
+    var printedRects = 0;
+    for (var off = 0x20; off + 16 <= read && printedRects < 24; off += 4)
+    {
+        var l = BitConverter.ToSingle(body, off);
+        var t = BitConverter.ToSingle(body, off + 4);
+        var r = BitConverter.ToSingle(body, off + 8);
+        var b = BitConverter.ToSingle(body, off + 12);
+        if (!LooksLikeRect(l, t, r, b, winW, winH)) continue;
+        Console.WriteLine($"    +0x{off:X3}: ({l,9:F1},{t,9:F1})-({r,9:F1},{b,9:F1}) size=({r - l,8:F1}x{b - t,8:F1})");
+        printedRects++;
+    }
+}
+
+static void DumpAtlasNodeAncestry(
+    MemoryReader reader,
+    nint node,
+    Dictionary<nint, nint> parents,
+    Dictionary<nint, int> childIndexes,
+    int winW,
+    int winH)
+{
+    Console.WriteLine($"\nAtlas node ancestry dump for 0x{node:X16}:");
+    if (!parents.ContainsKey(node))
+    {
+        Console.WriteLine("  Node is not inside the current Atlas subtree. Use an address from this run's sample list.");
+        return;
+    }
+
+    var depth = 0;
+    for (var cur = node; cur != 0 && depth < 16; cur = parents.TryGetValue(cur, out var parent) ? parent : 0, depth++)
+    {
+        childIndexes.TryGetValue(cur, out var childIndex);
+        Console.WriteLine($"  depth={depth,2} idx={childIndex,4} el=0x{cur:X16} visible={ReadUiVisible(reader, cur),-5} children={TryGetUiChildCount(reader, cur),5} flags=0x{ReadUiFlags(reader, cur):X8}");
+        DumpAtlasTransformWindow(reader, cur);
+        DumpAtlasKnownRects(reader, cur, winW, winH);
+        DumpAtlasTopPoints(reader, cur, winW, winH);
+    }
+}
+
+static void DumpAtlasTransformWindow(MemoryReader reader, nint element)
+{
+    var body = new byte[0x360];
+    var read = reader.TryReadBytes(element, body);
+    if (read < 0x140) return;
+
+    Console.WriteLine("      floats +0x100..+0x140:");
+    for (var off = 0x100; off <= 0x140; off += 0x10)
+    {
+        var a = BitConverter.ToSingle(body, off);
+        var b = BitConverter.ToSingle(body, off + 4);
+        var c = BitConverter.ToSingle(body, off + 8);
+        var d = BitConverter.ToSingle(body, off + 12);
+        Console.WriteLine($"        +0x{off:X3}: {a,10:F3} {b,10:F3} {c,10:F3} {d,10:F3}");
+    }
+
+    PrintRectAt(body, read, 0x110, "rect? +0x110");
+    PrintRectAt(body, read, 0x114, "pan?  +0x114");
+    PrintRectAt(body, read, 0x118, "pan?  +0x118");
+    PrintRectAt(body, read, 0x280, "local +0x280");
+    PrintRectAt(body, read, 0x330, "panel +0x330");
+    PrintRectAt(body, read, 0x340, "panel +0x340");
+}
+
+static void PrintRectAt(byte[] body, int read, int off, string label)
+{
+    if (off + 16 > read) return;
+    var l = BitConverter.ToSingle(body, off);
+    var t = BitConverter.ToSingle(body, off + 4);
+    var r = BitConverter.ToSingle(body, off + 8);
+    var b = BitConverter.ToSingle(body, off + 12);
+    if (!float.IsFinite(l) || !float.IsFinite(t) || !float.IsFinite(r) || !float.IsFinite(b)) return;
+    Console.WriteLine($"      {label}: ({l,10:F3},{t,10:F3})-({r,10:F3},{b,10:F3}) size=({r - l,10:F3}x{b - t,10:F3})");
+}
+
+static void DumpAtlasKnownRects(MemoryReader reader, nint element, int winW, int winH)
+{
+    var body = new byte[0x360];
+    var read = reader.TryReadBytes(element, body);
+    if (read < 0x80) return;
+
+    var printed = 0;
+    for (var off = 0x20; off + 16 <= read; off += 4)
+    {
+        var l = BitConverter.ToSingle(body, off);
+        var t = BitConverter.ToSingle(body, off + 4);
+        var r = BitConverter.ToSingle(body, off + 8);
+        var b = BitConverter.ToSingle(body, off + 12);
+        if (!LooksLikeRect(l, t, r, b, winW, winH)) continue;
+        if (printed++ >= 8) break;
+        Console.WriteLine($"      rect +0x{off:X3}: ({l,8:F1},{t,8:F1})-({r,8:F1},{b,8:F1}) size=({r - l,6:F1}x{b - t,6:F1})");
+    }
+}
+
+static void DumpAtlasTopPoints(MemoryReader reader, nint element, int winW, int winH)
+{
+    var body = new byte[0x360];
+    var read = reader.TryReadBytes(element, body);
+    if (read < 0x80) return;
+
+    var printed = 0;
+    for (var off = 0x20; off + 8 <= read; off += 4)
+    {
+        var x = BitConverter.ToSingle(body, off);
+        var y = BitConverter.ToSingle(body, off + 4);
+        if (!LooksLikePoint(x, y, winW, winH)) continue;
+        if (printed++ >= 10) break;
+        Console.WriteLine($"      vec2 +0x{off:X3}: ({x,8:F1},{y,8:F1})");
+    }
+}
+
+static bool LooksLikeRect(float l, float t, float r, float b, int winW, int winH)
+{
+    if (!float.IsFinite(l) || !float.IsFinite(t) || !float.IsFinite(r) || !float.IsFinite(b)) return false;
+    var w = r - l;
+    var h = b - t;
+    if (w <= 2f || h <= 2f || w > Math.Max(5000, winW * 4) || h > Math.Max(5000, winH * 4)) return false;
+    var marginX = Math.Max(4000, winW * 2);
+    var marginY = Math.Max(4000, winH * 2);
+    return l > -marginX && r < winW + marginX && t > -marginY && b < winH + marginY;
+}
+
+static bool LooksLikePoint(float x, float y, int winW, int winH)
+{
+    if (!float.IsFinite(x) || !float.IsFinite(y)) return false;
+    if (Math.Abs(x) < 0.001f && Math.Abs(y) < 0.001f) return false;
+    var marginX = Math.Max(8000, winW * 8);
+    var marginY = Math.Max(8000, winH * 8);
+    return x > -marginX && x < winW + marginX && y > -marginY && y < winH + marginY;
+}
+
+static bool IsNodeSized(float l, float t, float r, float b)
+{
+    var w = r - l;
+    var h = b - t;
+    return w is >= 6f and <= 180f && h is >= 6f and <= 180f;
+}
+
+static bool LooksLikeFinalAtlasNodeRect(float l, float t, float r, float b, int winW, int winH)
+{
+    if (!float.IsFinite(l) || !float.IsFinite(t) || !float.IsFinite(r) || !float.IsFinite(b)) return false;
+    var w = r - l;
+    var h = b - t;
+    if (w is < 6f or > 220f || h is < 6f or > 220f) return false;
+    if (Math.Abs(w / h) is < 0.35f or > 2.85f) return false;
+    var cx = (l + r) * 0.5f;
+    var cy = (t + b) * 0.5f;
+    return cx > -100f && cx < winW + 100f && cy > -100f && cy < winH + 100f;
+}
+
+static void TryGetClientSize(out int width, out int height)
+{
+    width = 1920;
+    height = 1080;
+    var hwnd = Win.GetForegroundWindow();
+    if (hwnd != 0 && Win.GetClientRect(hwnd, out var rc))
+    {
+        var w = rc.right - rc.left;
+        var h = rc.bottom - rc.top;
+        if (w > 0 && h > 0)
+        {
+            width = w;
+            height = h;
+        }
+    }
+}
+
 static nint SafePtr(MemoryReader reader, nint addr)
 {
     if (!reader.TryReadStruct<nint>(addr, out var p)) return 0;

@@ -20,6 +20,8 @@ public sealed class ApiServer : IDisposable
     private readonly ComponentFieldReader? _inspector;
     private readonly EntityNameResolver _entityNames;
     private readonly GameDataService _gameData;
+    private readonly Func<object>? _atlasProvider;
+    private readonly Action<IReadOnlyList<string>>? _setAtlasPins;
     private volatile bool _running;
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -36,6 +38,8 @@ public sealed class ApiServer : IDisposable
         ComponentFieldReader? inspector,
         EntityNameResolver entityNames,
         GameDataService gameData,
+        Func<object>? atlasProvider = null,
+        Action<IReadOnlyList<string>>? setAtlasPins = null,
         int port = 7777)
     {
         _state = state;
@@ -47,6 +51,8 @@ public sealed class ApiServer : IDisposable
         _inspector = inspector;
         _entityNames = entityNames;
         _gameData = gameData;
+        _atlasProvider = atlasProvider;
+        _setAtlasPins = setAtlasPins;
         _listener.Prefixes.Add($"http://localhost:{port}/");
     }
 
@@ -381,6 +387,39 @@ public sealed class ApiServer : IDisposable
             case "/api/gamedata/pins":
             {
                 WriteJson(ctx, new { area = s.AreaCode, pins = _gameData.GetPins(s.AreaCode) });
+                break;
+            }
+
+            case "/api/atlas":
+            {
+                if (method == "GET")
+                    WriteJson(ctx, _atlasProvider?.Invoke() ?? new { open = false, total = 0, nodeList = Array.Empty<object>() });
+                else
+                    WriteJson(ctx, new { error = "method not allowed" }, 405);
+                break;
+            }
+
+            case "/api/atlas-pins":
+            {
+                if (method == "POST")
+                {
+                    var body = ReadBody(ctx);
+                    var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body, Json);
+                    var pins = new List<string>();
+                    if (data != null && data.TryGetValue("pins", out var pinsEl) && pinsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var pinEl in pinsEl.EnumerateArray())
+                        {
+                            if (pinEl.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(pinEl.GetString()))
+                                pins.Add(pinEl.GetString()!.Trim());
+                            else if (pinEl.ValueKind == JsonValueKind.Number && pinEl.TryGetInt64(out var numeric))
+                                pins.Add($"0x{numeric:X}");
+                        }
+                    }
+                    _setAtlasPins?.Invoke(pins);
+                    WriteJson(ctx, new { ok = true, count = pins.Count });
+                }
+                else WriteJson(ctx, new { error = "method not allowed" }, 405);
                 break;
             }
 
