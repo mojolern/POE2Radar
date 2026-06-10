@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Text.Json;
 using POE2Radar.Core;
 
 namespace POE2Radar.Core.Game;
@@ -23,7 +25,7 @@ public sealed class Poe2Atlas
 
     private readonly MemoryReader _reader;
     private readonly object _nodeLock = new();
-    private readonly Dictionary<nint, (string map, string[] content)> _tagCache = new();
+    private readonly Dictionary<nint, ResolvedAtlasInfo> _tagCache = new();
 
     private nint _nodeVtable;
     private nint _nodeCanvas;
@@ -31,6 +33,8 @@ public sealed class Poe2Atlas
     private int _hiddenTicks;
 
     private static readonly string[] NoTags = Array.Empty<string>();
+    private static readonly string[] NoCandidates = Array.Empty<string>();
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> AreaNames = new(LoadAreaNames);
 
     public Poe2Atlas(MemoryReader reader) => _reader = reader;
 
@@ -50,6 +54,8 @@ public sealed class Poe2Atlas
         bool Visible,
         int IconType,
         string MapName,
+        string MapSource,
+        IReadOnlyList<string> MapCandidates,
         IReadOnlyList<string> Tags)
     {
         public bool Unlocked => (Flags & 0x01) != 0;
@@ -172,7 +178,7 @@ public sealed class Poe2Atlas
                 }
                 else
                 {
-                    resolved = ("", NoTags);
+                    resolved = new ResolvedAtlasInfo("", NoTags, "deferred", NoCandidates);
                     allCached = false;
                 }
             }
@@ -183,7 +189,8 @@ public sealed class Poe2Atlas
 
             outNodes.Add(new AtlasNodeLive(
                 el, id, content, state, biome, flags, completion,
-                x, y, w, h, scale, visible, iconType, resolved.map, resolved.content));
+                x, y, w, h, scale, visible, iconType,
+                resolved.Map, resolved.MapSource, resolved.MapCandidates, resolved.Content));
         }
 
         if (matched < 8)
@@ -208,26 +215,15 @@ public sealed class Poe2Atlas
         return true;
     }
 
-    private (string map, string[] content) ResolveTags(nint el)
+    private sealed record ResolvedAtlasInfo(string Map, string[] Content, string MapSource, string[] MapCandidates);
+
+    private ResolvedAtlasInfo ResolveTags(nint el)
     {
-        var map = "";
-        var mapRow = Ptr(el + AtlasMapNodeId);
-        if (mapRow != 0)
-        {
-            var w = Ptr(mapRow);
-            var code = w != 0 ? _reader.ReadStringUtf16(w, 64) : "";
-            if (!code.StartsWith("Map", StringComparison.Ordinal))
-            {
-                var w2 = Ptr(w);
-                code = w2 != 0 ? _reader.ReadStringUtf16(w2, 64) : code;
-            }
-            if (code.StartsWith("Map", StringComparison.Ordinal))
-                map = Prettify(code);
-        }
+        var map = ResolveMapName(el);
 
         var tags = new List<string>(4);
         var row = Ptr(el + AtlasContent);
-        if (row == 0) return (map, NoTags);
+        if (row == 0) return new ResolvedAtlasInfo(map.Name, NoTags, map.Source, map.Candidates);
 
         var contentRow = Ptr(row + 0x38);
         if (contentRow != 0)
@@ -260,7 +256,11 @@ public sealed class Poe2Atlas
             }
         }
 
-        return (map, tags.Count == 0 ? NoTags : tags.ToArray());
+        return new ResolvedAtlasInfo(
+            map.Name,
+            tags.Count == 0 ? NoTags : tags.ToArray(),
+            map.Source,
+            map.Candidates);
     }
 
     private string ReadDisplayName(nint row)
@@ -287,6 +287,103 @@ public sealed class Poe2Atlas
             if (LooksLikeName(s)) return s.Trim();
         }
         return "";
+    }
+
+    private (string Name, string Source, string[] Candidates) ResolveMapName(nint el)
+    {
+        var mapRow = Ptr(el + AtlasMapNodeId);
+        if (mapRow == 0) return ("", "no-map-row", NoCandidates);
+
+        var w = Ptr(mapRow);
+        var code = w != 0 ? _reader.ReadStringUtf16(w, 80) : "";
+        if (!code.StartsWith("Map", StringComparison.Ordinal))
+        {
+            var w2 = Ptr(w);
+            code = w2 != 0 ? _reader.ReadStringUtf16(w2, 80) : code;
+        }
+        if (code.StartsWith("Map", StringComparison.Ordinal))
+        {
+            var display = FriendlyMapName(code);
+            return (display, display.Equals(Prettify(code), StringComparison.Ordinal) ? "map-code" : "area-table", [code, display]);
+        }
+
+        // Some atlas rows do not expose a Map* code through the simple first-field path.
+        // Sikaka's research probe found that the display title can still be reached by
+        // scanning nearby row pointers, so use that as a conservative fallback.
+        return ScanDisplayTitle(mapRow);
+    }
+
+    private (string Name, string Source, string[] Candidates) ScanDisplayTitle(nint row)
+    {
+        var best = "";
+        var bestScore = int.MinValue;
+        var candidates = new List<string>(12);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var off = -0x40; off < 0x180; off += 8)
+        {
+            var p = Ptr(row + off);
+            if (p == 0) continue;
+
+            foreach (var s in CandidateStrings(p))
+            {
+                var trimmed = s.Trim();
+                if (seen.Add(trimmed) && candidates.Count < 12)
+                    candidates.Add($"+0x{off:X}:{trimmed}");
+                if (!LooksLikeMapTitle(trimmed)) continue;
+                var score = ScoreMapTitle(trimmed);
+                if (score <= bestScore) continue;
+                best = trimmed;
+                bestScore = score;
+            }
+        }
+        return (best, best.Length > 0 ? "row-scan" : "not-found", candidates.ToArray());
+    }
+
+    private IEnumerable<string> CandidateStrings(nint p)
+    {
+        var addrs = new[] { p, Ptr(p), Ptr(p + 0x20), Ptr(p + 0x08), Ptr(p + 0x10), Ptr(p + 0x30) };
+        foreach (var a in addrs)
+        {
+            if (a == 0) continue;
+
+            var s = _reader.ReadStringUtf16(a, 80);
+            if (LooksLikeName(s)) yield return s;
+
+            s = ReadAscii(a, 80);
+            if (LooksLikeName(s)) yield return s;
+        }
+    }
+
+    private static bool LooksLikeMapTitle(string s)
+    {
+        if (!LooksLikeName(s)) return false;
+        s = s.Trim();
+        if (s.Length < 4) return false;
+        if (s.StartsWith("Map", StringComparison.Ordinal)) return false;
+        if (s.Contains('/') || s.Contains('\\') || s.Contains('_')) return false;
+        if (s.Contains("atlas", StringComparison.OrdinalIgnoreCase)) return false;
+        if (s.Contains("map_atlas_node", StringComparison.OrdinalIgnoreCase)) return false;
+        if (s.Contains("Players in area", StringComparison.OrdinalIgnoreCase)) return false;
+        return s.Any(char.IsLetter) && s.Count(char.IsDigit) <= 2;
+    }
+
+    private static int ScoreMapTitle(string s)
+    {
+        var score = 0;
+        if (s.Contains(' ')) score += 8;
+        if (s.Any(char.IsLower)) score += 4;
+        if (s.Any(char.IsUpper)) score += 2;
+        if (s.Length is >= 6 and <= 32) score += 3;
+        if (s.Equals(s.ToUpperInvariant(), StringComparison.Ordinal)) score -= 8;
+
+        ReadOnlySpan<string> contentWords =
+        [
+            "Boss", "Breach", "Ritual", "Delirium", "Expedition", "Corrupted",
+            "Content", "Biome", "Players in area", "Powerful Map Boss"
+        ];
+        foreach (var word in contentWords)
+            if (s.Contains(word, StringComparison.OrdinalIgnoreCase)) score -= 20;
+        return score;
     }
 
     private bool AtlasPanelOpen(nint uiRoot)
@@ -451,6 +548,41 @@ public sealed class Poe2Atlas
             sb.Append(c);
         }
         return System.Text.RegularExpressions.Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+    }
+
+    private static string FriendlyMapName(string code)
+    {
+        if (AreaNames.Value.TryGetValue(code, out var name) && !string.IsNullOrWhiteSpace(name))
+            return name;
+        return Prettify(code);
+    }
+
+    private static IReadOnlyDictionary<string, string> LoadAreaNames()
+    {
+        var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var asm = Assembly.GetExecutingAssembly();
+            var res = asm.GetManifestResourceNames()
+                .FirstOrDefault(n => n.EndsWith("world_areas.json", StringComparison.OrdinalIgnoreCase));
+            if (res == null) return names;
+            using var stream = asm.GetManifestResourceStream(res);
+            if (stream == null) return names;
+            using var doc = JsonDocument.Parse(stream);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind != JsonValueKind.Object) continue;
+                if (!prop.Value.TryGetProperty("name", out var n) || n.ValueKind != JsonValueKind.String) continue;
+                var name = n.GetString();
+                if (!string.IsNullOrWhiteSpace(name))
+                    names[prop.Name] = name;
+            }
+        }
+        catch
+        {
+            // Missing or stale embedded area data should degrade to Prettify(code), not break reads.
+        }
+        return names;
     }
 
     private static string TitleCase(string s)

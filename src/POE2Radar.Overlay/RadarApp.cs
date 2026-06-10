@@ -372,6 +372,8 @@ public sealed class RadarApp : IDisposable
                     el = AtlasNodeKey(n.Element),
                     id = n.Id,
                     map = n.MapName,
+                    mapSource = n.MapSource,
+                    mapCandidates = n.MapCandidates,
                     tags = n.Tags,
                     label = AtlasNodeLabel(n),
                     visible = n.Visible,

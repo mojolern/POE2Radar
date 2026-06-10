@@ -1122,7 +1122,7 @@ function renderAtlas(){
   const q=($('atlasSearch')?.value||'').toLowerCase();
   const nodes=(atlasData&&atlasData.nodeList)||[];
   const filtered=nodes.filter(n=>{
-    const hay=[n.label,n.map,(n.tags||[]).join(' ')].join(' ').toLowerCase();
+    const hay=[n.label,n.map,n.mapSource,(n.tags||[]).join(' '),(n.mapCandidates||[]).join(' ')].join(' ').toLowerCase();
     return !q||hay.includes(q);
   }).slice(0,600);
   $('atlasStatus').textContent=atlasData

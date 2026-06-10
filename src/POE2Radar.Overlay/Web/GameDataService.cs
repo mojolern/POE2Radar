@@ -1,4 +1,5 @@
 using System.Text.Json;
+using POE2Radar.Core.Game;
 
 namespace POE2Radar.Overlay.Web;
 
@@ -14,14 +15,29 @@ public sealed class EntityNameResolver
     {
         try
         {
-            if (!File.Exists(filePath)) return;
-            var map = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(filePath));
-            if (map is null) return;
-            foreach (var (key, value) in map)
-                if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
-                    _names[key] = value;
+            if (File.Exists(filePath))
+            {
+                Load(JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(filePath)));
+                return;
+            }
+
+            var asm = typeof(Poe2Atlas).Assembly;
+            var res = asm.GetManifestResourceNames()
+                .FirstOrDefault(n => n.EndsWith("entity_names.json", StringComparison.OrdinalIgnoreCase));
+            if (res == null) return;
+            using var stream = asm.GetManifestResourceStream(res);
+            if (stream == null) return;
+            Load(JsonSerializer.Deserialize<Dictionary<string, string>>(stream));
         }
         catch { }
+    }
+
+    private void Load(Dictionary<string, string>? map)
+    {
+        if (map is null) return;
+        foreach (var (key, value) in map)
+            if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+                _names[key] = value;
     }
 
     public string ResolveOrShorten(string metadata)
@@ -89,20 +105,48 @@ public sealed class GameDataService
     {
         try
         {
-            if (!File.Exists(path)) return;
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            foreach (var item in EnumerateObjects(doc.RootElement))
+            if (File.Exists(path))
             {
-                var code = ReadString(item, "code", "id", "Id", "Code") ?? "";
-                var name = ReadString(item, "name", "Name") ?? code;
-                if (string.IsNullOrWhiteSpace(code) && !string.IsNullOrWhiteSpace(name)) code = name;
-                if (string.IsNullOrWhiteSpace(code)) continue;
-                var area = new WorldArea(code, name, ReadInt(item, "act", "Act"), ReadInt(item, "level", "Level", "areaLevel"),
-                    ReadBool(item, "town", "isTown", "IsTown"), ReadBool(item, "waypoint", "hasWaypoint", "HasWaypoint"));
-                _areas[code] = area;
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                LoadAreas(doc.RootElement);
+                return;
             }
+
+            var asm = typeof(Poe2Atlas).Assembly;
+            var res = asm.GetManifestResourceNames()
+                .FirstOrDefault(n => n.EndsWith("world_areas.json", StringComparison.OrdinalIgnoreCase));
+            if (res == null) return;
+            using var stream = asm.GetManifestResourceStream(res);
+            if (stream == null) return;
+            using var embeddedDoc = JsonDocument.Parse(stream);
+            LoadAreas(embeddedDoc.RootElement);
         }
         catch { }
+    }
+
+    private void LoadAreas(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in root.EnumerateArray())
+                if (item.ValueKind == JsonValueKind.Object) LoadArea("", item);
+        }
+        else if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in root.EnumerateObject())
+                if (prop.Value.ValueKind == JsonValueKind.Object) LoadArea(prop.Name, prop.Value);
+        }
+    }
+
+    private void LoadArea(string fallbackCode, JsonElement item)
+    {
+        var code = ReadString(item, "code", "id", "Id", "Code") ?? fallbackCode;
+        var name = ReadString(item, "name", "Name") ?? code;
+        if (string.IsNullOrWhiteSpace(code) && !string.IsNullOrWhiteSpace(name)) code = name;
+        if (string.IsNullOrWhiteSpace(code)) return;
+        var area = new WorldArea(code, name, ReadInt(item, "act", "Act"), ReadInt(item, "level", "Level", "areaLevel"),
+            ReadBool(item, "town", "isTown", "IsTown"), ReadBool(item, "waypoint", "hasWaypoint", "HasWaypoint"));
+        _areas[code] = area;
     }
 
     private void LoadBuffs(string path)

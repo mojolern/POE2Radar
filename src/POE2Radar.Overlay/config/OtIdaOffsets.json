@@ -1,0 +1,482 @@
+{
+  "_meta": {
+    "generated": "2026-05-31",
+    "method": "IDA Pro MCP string search -> xref -> decompile setter -> extract offset",
+    "binary": "PathOfExile.exe (Patch 0.5)",
+    "total_components": 26,
+    "total_fields": 220
+  },
+  "Render": {
+    "byte_setter": "sub_1415B9C20",
+    "float_setter": "sub_1415BBCD0",
+    "int_setter": "sub_1415BBFE0",
+    "string_anchor": "hide_mini_life_bar",
+    "fields": {
+      "r":                                {"offset": "0x58",  "type": "float", "notes": "color R"},
+      "g":                                {"offset": "0x5C",  "type": "float", "notes": "color G"},
+      "b":                                {"offset": "0x60",  "type": "float", "notes": "color B"},
+      "a":                                {"offset": "0x64",  "type": "float", "notes": "color A"},
+      "dampen_height_speed":              {"offset": "0x68",  "type": "float"},
+      "has_light":                        {"offset": "0x6C",  "type": "int",   "notes": "1=has light, 2=AO lights"},
+      "visual_size_index":                {"offset": "0x70",  "type": "byte"},
+      "light_starts_disabled":            {"offset": "0x71",  "type": "byte"},
+      "dampen_height":                    {"offset": "0x72",  "type": "byte"},
+      "tilt_to_target":                   {"offset": "0x73",  "type": "byte"},
+      "maintain_tilt_after_movement":     {"offset": "0x74",  "type": "byte"},
+      "fade_arrows":                      {"offset": "0x75",  "type": "byte"},
+      "allow_attached_arrows":            {"offset": "0x76",  "type": "byte"},
+      "always_show_hover":                {"offset": "0x77",  "type": "byte"},
+      "hide_hover":                       {"offset": "0x78",  "type": "byte"},
+      "hide_mini_life_bar":               {"offset": "0x79",  "type": "byte", "verified": true},
+      "hide_info_display":                {"offset": "0x7A",  "type": "byte"},
+      "hide_talisman_icon":               {"offset": "0x7B",  "type": "byte"},
+      "look_at_nearest_player":           {"offset": "0x7C",  "type": "byte"},
+      "look_at_bb_top":                   {"offset": "0x7D",  "type": "byte"},
+      "use_attached_selection_box_if_no_drawcalls": {"offset": "0x7E", "type": "byte"},
+      "bounding_box_ignores_ground_height": {"offset": "0x7F", "type": "byte"},
+      "fixed_selection_size":             {"offset": "0x80",  "type": "byte"},
+      "no_selection_box":                 {"offset": "0x81",  "type": "byte"},
+      "disable_rendering":               {"offset": "0x82",  "type": "byte"},
+      "hide_all_buff_visuals":            {"offset": "0x83",  "type": "byte"},
+      "force_outline_no_alphatest":       {"offset": "0x85",  "type": "byte"},
+      "face_wind_direction":              {"offset": "0x86",  "type": "byte"},
+      "hover_padding":                    {"offset": "0x90",  "type": "float"},
+      "look_at_bb_offset":                {"offset": "0x94",  "type": "float"},
+      "look_at_min_fixate_delay_millis":  {"offset": "0x98",  "type": "int"},
+      "look_at_max_fixate_delay_millis":  {"offset": "0x9C",  "type": "int"},
+      "look_at_degrees_per_second":       {"offset": "0xA0",  "type": "float", "notes": "stored as radians"},
+      "look_at_max_xrotation_degrees":    {"offset": "0xA4",  "type": "float", "notes": "stored as radians"},
+      "look_at_max_zrotation_degrees":    {"offset": "0xA8",  "type": "float", "notes": "stored as radians"},
+      "scale_interp_speed":               {"offset": "0xF0",  "type": "float"},
+      "height_offset":                    {"offset": "0xF4",  "type": "float"},
+      "label_viewable_distance":          {"offset": "0xF8",  "type": "float"},
+      "selection_height_override":        {"offset": "0x110", "type": "float"},
+      "WorldPosition":                    {"offset": "0x138", "type": "Vector3", "notes": "from memory reading, not setter"},
+      "weapon_scale_modifier":            {"offset": "0x13C", "type": "float"},
+      "TerrainHeight":                    {"offset": "0x1B0", "type": "float", "notes": "from memory reading"},
+      "oshabi_colour_lerp_sec":           {"offset": "0x1F0", "type": "float"},
+      "ritual_kills_lerp_sec":            {"offset": "0x1F4", "type": "float"}
+    }
+  },
+  "Positioned": {
+    "byte_setter": "sub_141CFE050",
+    "int_setter": "sub_141CFDAD0",
+    "string_anchor": "serialise_position",
+    "fields": {
+      "object_size":                      {"offset": "0x10",  "type": "byte"},
+      "secondary_object_size":            {"offset": "0x11",  "type": "byte"},
+      "object_targeting_size":            {"offset": "0x12",  "type": "byte", "notes": "also sets +0x13=1 if was 0"},
+      "pushiness_size":                   {"offset": "0x14",  "type": "byte", "notes": "value*10, clamped 255"},
+      "base_pushiness":                   {"offset": "0x14",  "type": "byte", "notes": "same field as pushiness_size, clamped 255"},
+      "team":                             {"offset": "0x16",  "type": "word"},
+      "locked_orientation":               {"offset": "0x18",  "type": "byte"},
+      "locked_scale":                     {"offset": "0x19",  "type": "byte"},
+      "blocking":                         {"offset": "0x1A",  "type": "byte"},
+      "trigger_blocking":                 {"offset": "0x1B",  "type": "byte"},
+      "allow_search_trigger_blocking":    {"offset": "0x1C",  "type": "byte"},
+      "non_blocking_but_hittable":        {"offset": "0x1D",  "type": "byte"},
+      "phase_through_small_gaps_of_blocking_terrain": {"offset": "0x1E", "type": "byte"},
+      "force_placement":                  {"offset": "0x1F",  "type": "byte"},
+      "static":                           {"offset": "0x20",  "type": "byte"},
+      "does_not_push_when_pushed":        {"offset": "0x21",  "type": "byte"},
+      "ignore_being_pushed":              {"offset": "0x22",  "type": "byte"},
+      "serialise_position":               {"offset": "0x23",  "type": "byte"},
+      "serialise_collidable":             {"offset": "0x24",  "type": "byte"},
+      "serialise_movement":               {"offset": "0x25",  "type": "byte"},
+      "serialise_most_recent_movement_tilt_angle": {"offset": "0x26", "type": "byte"},
+      "flip":                             {"offset": "0x27",  "type": "byte"},
+      "flip_lock":                        {"offset": "0x28",  "type": "byte"},
+      "create_dynamic_height":            {"offset": "0x2A",  "type": "byte", "notes": "also sets static=1"},
+      "flying":                           {"offset": "0x2B",  "type": "byte"},
+      "face_movement_direction":          {"offset": "0x2D",  "type": "byte"},
+      "scale":                            {"offset": "0x74",  "type": "float", "notes": "value/100.0"},
+      "Reaction":                         {"offset": "0x1E0", "type": "byte", "notes": "friendly=(b&0x7F)==1, from memory reading"}
+    }
+  },
+  "Targetable": {
+    "byte_setter": "sub_1417263A0",
+    "string_anchor": "no_highlight",
+    "fields": {
+      "attackable":                       {"offset": "0x17",  "type": "byte"},
+      "targetable":                       {"offset": "0x18",  "type": "byte"},
+      "force_targetable":                 {"offset": "0x19",  "type": "byte"},
+      "no_highlight":                     {"offset": "0x1A",  "type": "byte"},
+      "is_map_device":                    {"offset": "0x1B",  "type": "byte"},
+      "is_interactable_map_device":       {"offset": "0x1C",  "type": "byte"},
+      "control_minimap_icon":             {"offset": "0x1D",  "type": "byte"},
+      "control_rendering_enabled":        {"offset": "0x1E",  "type": "byte"},
+      "untargetable_while_player_in_sector": {"offset": "0x20", "type": "byte"},
+      "hidden_in_item_hide_sector":       {"offset": "0x21",  "type": "byte"},
+      "show_marker_when_untargetable":    {"offset": "0x22",  "type": "byte"},
+      "targetable_by_minion_owner":       {"offset": "0x23",  "type": "byte"},
+      "quest_state_consider_all_players": {"offset": "0x25",  "type": "byte"},
+      "gamepad_cannot_select":            {"offset": "0x26",  "type": "byte"},
+      "gamepad_requires_line_of_sight":   {"offset": "0x27",  "type": "byte"},
+      "gamepad_items_take_priority":      {"offset": "0x28",  "type": "byte"},
+      "gamepad_force_default_targeting_priority": {"offset": "0x29", "type": "byte"},
+      "gamepad_intercepted_interaction":  {"offset": "0x2A",  "type": "byte"},
+      "gamepad_priortise_interact_over_skills": {"offset": "0x2B", "type": "byte"},
+      "gamepad_targetable_even_if_hidden": {"offset": "0x2C", "type": "byte"},
+      "gamepad_always_close_interactable": {"offset": "0x2D", "type": "byte"},
+      "non_gamepad_force_untargetable":   {"offset": "0x2E",  "type": "byte"},
+      "always_targetable_in_couch_coop":  {"offset": "0x2F",  "type": "byte"},
+      "requires_grouping_in_couch_coop":  {"offset": "0x30",  "type": "byte"},
+      "requires_an_unidentified_item":    {"offset": "0xB8",  "type": "byte"}
+    }
+  },
+  "InteractionAction": {
+    "byte_setter": "sub_141CA9E40",
+    "int_setter": "sub_141CA9C10",
+    "float_setter": "sub_141CA9B40",
+    "string_anchor": "interaction_distance_override",
+    "fields": {
+      "interaction_requires_exact_position": {"offset": "0x1BD", "type": "byte"},
+      "interaction_animation_hides_weapons": {"offset": "0x1BE", "type": "byte"},
+      "force_human_form":                 {"offset": "0x1BF", "type": "byte"},
+      "interaction_distance_override_ignores_minimum": {"offset": "0x1C0", "type": "byte"},
+      "requires_line_of_sight":           {"offset": "0x1C1", "type": "byte"},
+      "interaction_distance_override":    {"offset": "0x1C2", "type": "byte"},
+      "console_interaction_distance_override": {"offset": "0x1C3", "type": "byte"},
+      "interaction_forward_offset":       {"offset": "0x1C4", "type": "byte"},
+      "interaction_right_offset":         {"offset": "0x1C5", "type": "byte"},
+      "client_walk_reverse":              {"offset": "0x1C6", "type": "byte"},
+      "skip_camera_interpolation":        {"offset": "0x1C7", "type": "byte"},
+      "uncollidable_during_action":       {"offset": "0x1C8", "type": "byte"},
+      "show_message_when_disabled":       {"offset": "0x1C9", "type": "byte"},
+      "minions_can_interact":             {"offset": "0x1CA", "type": "byte"},
+      "require_any_quest_flag":           {"offset": "0x1CB", "type": "byte"},
+      "require_of_interactor_only":       {"offset": "0x1CC", "type": "byte"},
+      "required_flags_need_not_match":    {"offset": "0x1CD", "type": "byte"},
+      "no_dynamic_serialisation":         {"offset": "0x1CE", "type": "byte"},
+      "skip_animation_on_alt_action":     {"offset": "0x1CF", "type": "byte"},
+      "client_walk_position_offset":      {"offset": "0x1DC", "type": "float"},
+      "interaction_forward_direction":    {"offset": "0x1E0", "type": "float", "notes": "stored as radians"},
+      "interaction_duration":             {"offset": "0x1E4", "type": "float"},
+      "client_walk_duration":             {"offset": "0x1E8", "type": "float"}
+    }
+  },
+  "Life": {
+    "byte_setter": "sub_141CAF1F0",
+    "int_setter": "sub_141CAF0C0",
+    "string_anchor": "corpse_usable",
+    "fields": {
+      "initial_life_percentage":          {"offset": "0xD0",  "type": "int"},
+      "initial_mana_percentage":          {"offset": "0xD4",  "type": "int"},
+      "corpse_sink_depth":                {"offset": "0xD8",  "type": "int"},
+      "corpse_sink_delay_ms":             {"offset": "0xDC",  "type": "int"},
+      "corpse_sink_time_ms":              {"offset": "0xE0",  "type": "int"},
+      "prevent_corpse_sinking":           {"offset": "0xE4",  "type": "byte"},
+      "no_corpse_marker":                 {"offset": "0xE5",  "type": "byte"},
+      "corpse_usable":                    {"offset": "0xE7",  "type": "byte"},
+      "ignore_on_life_changed_stats":     {"offset": "0xE8",  "type": "byte"},
+      "Health":                           {"offset": "0x1A8", "type": "VitalStruct", "notes": ".Current +0x30, .Max +0x2C"},
+      "Mana":                             {"offset": "0x1F8", "type": "VitalStruct"},
+      "EnergyShield":                     {"offset": "0x230", "type": "VitalStruct"}
+    }
+  },
+  "Chest": {
+    "byte_setter": "sub_141CDF2A0",
+    "int_setter": "sub_141CDF4F0",
+    "string_anchor": "opening_destroys",
+    "fields": {
+      "opening_destroys":                 {"offset": "0x20",  "type": "byte"},
+      "large":                            {"offset": "0x21",  "type": "byte"},
+      "axis_aligned":                     {"offset": "0x22",  "type": "byte"},
+      "face_camera":                      {"offset": "0x23",  "type": "byte"},
+      "open_on_damage":                   {"offset": "0x24",  "type": "byte"},
+      "locked":                           {"offset": "0x25",  "type": "byte"},
+      "open_chest_when_daemons_die":      {"offset": "0x26",  "type": "byte"},
+      "allocate_to_area_owner":           {"offset": "0x27",  "type": "byte"},
+      "disable_initial_animation_state":  {"offset": "0x28",  "type": "byte"},
+      "require_map_owner":                {"offset": "0x29",  "type": "byte"},
+      "silent_lock":                      {"offset": "0x2A",  "type": "byte"},
+      "rarity":                           {"offset": "0x2C",  "type": "int"},
+      "quest_item":                       {"offset": "0x30",  "type": "ptr"},
+      "open_animation":                   {"offset": "0x68",  "type": "ref"},
+      "OpenState":                        {"offset": "0x168", "type": "byte", "notes": "1=closed, from memory reading"}
+    }
+  },
+  "Pathfinding": {
+    "int_setter": "sub_141CBD6E0",
+    "string_anchor": "base_speed",
+    "fields": {
+      "avoid_others":                     {"offset": "0xD0",  "type": "byte"},
+      "rotation_angle":                   {"offset": "0xD4",  "type": "float", "notes": "stored as radians"},
+      "start_angle":                      {"offset": "0xD8",  "type": "float", "notes": "stored as radians"},
+      "start_angle_flag":                 {"offset": "0xDC",  "type": "byte"},
+      "pause_at_waypoint_duration":       {"offset": "0xE0",  "type": "float", "notes": "ms->sec conversion"},
+      "rotate_to_movement_direction":     {"offset": "0xE4",  "type": "byte"},
+      "flying":                           {"offset": "0xE5",  "type": "byte"},
+      "orient_to_first_movement":         {"offset": "0xE6",  "type": "byte"},
+      "maintain_height":                  {"offset": "0xE8",  "type": "byte"},
+      "base_speed":                       {"offset": "0xEC",  "type": "int"}
+    }
+  },
+  "Actor": {
+    "byte_setter": "sub_141D59050",
+    "int_setter": "sub_141D591B0",
+    "string_anchor": "slow_animations_go_to_idle",
+    "fields": {
+      "simulation_height":                {"offset": "0xF8",  "type": "int"},
+      "disable_action_queue_from_stun_or_end_action": {"offset": "0x100", "type": "byte"},
+      "disable_play_animation_from_set_stance": {"offset": "0x101", "type": "byte"},
+      "slow_animations_go_to_idle":       {"offset": "0x102", "type": "byte"},
+      "blend_once_animations_by_default": {"offset": "0x104", "type": "byte"}
+    }
+  },
+  "Animated": {
+    "byte_setter": "sub_141CC9620",
+    "string_anchor": "serialise_animation_progress",
+    "fields": {
+      "lock_animated_object":             {"offset": "0xC0",  "type": "byte"},
+      "continue_animations":              {"offset": "0xC1",  "type": "byte"},
+      "serialise_animation_progress":     {"offset": "0xC2",  "type": "byte"},
+      "serialise_animation_speed":        {"offset": "0xC3",  "type": "byte"},
+      "always_interpolate_bearing":       {"offset": "0xC4",  "type": "byte"}
+    }
+  },
+  "AreaTransition": {
+    "float_setter": "sub_141CD2AA0",
+    "string_anchor": "teleport_delay",
+    "fields": {
+      "grace_period":                     {"offset": "0x18",  "type": "float"},
+      "teleport_delay":                   {"offset": "0x1C",  "type": "float"}
+    }
+  },
+  "TriggerableBlockage": {
+    "byte_setter": "sub_141D298B0",
+    "string_anchor": "start_blocked",
+    "fields": {
+      "start_blocked":                    {"offset": "0x10",  "type": "byte"},
+      "disable_save":                     {"offset": "0x11",  "type": "byte"},
+      "shunt_objects_away":               {"offset": "0x12",  "type": "byte"},
+      "shunt_noncollidable_objects":      {"offset": "0x13",  "type": "byte"}
+    }
+  },
+  "Monster": {
+    "byte_setter": "sub_141CBA7F0",
+    "string_anchor": "is_boss",
+    "fields": {
+      "disable_default_monster_stats":    {"offset": "0x24",  "type": "byte"},
+      "disable_default_attacker_monster_stats": {"offset": "0x25", "type": "byte"},
+      "flip_enabled":                     {"offset": "0x26",  "type": "byte"},
+      "is_boss":                          {"offset": "0x27",  "type": "byte"},
+      "preload_skills_when_added":        {"offset": "0x28",  "type": "byte"}
+    }
+  },
+  "NPC": {
+    "byte_setter": "sub_141CBEFD0",
+    "int_setter": "sub_1415EED80",
+    "string_anchor": "marker_enabled",
+    "fields": {
+      "marker_enabled":                   {"offset": "0x20",  "type": "byte"},
+      "max_rotation_delta":               {"offset": "0x60",  "type": "float", "notes": "stored as radians, float index 24"},
+      "original_rotation_offset":         {"offset": "0x64",  "type": "float", "notes": "stored as radians"},
+      "marker_offset_z":                  {"offset": "0x68",  "type": "float"},
+      "marker_offset_x":                  {"offset": "0x6C",  "type": "float"},
+      "marker_offset_y":                  {"offset": "0x70",  "type": "float"}
+    }
+  },
+  "ObjectMagicProperties": {
+    "byte_setter": "sub_141CC1A20",
+    "string_anchor": "identify_on_creation",
+    "fields": {
+      "identify_on_creation":             {"offset": "0x19",  "type": "byte"},
+      "relic":                            {"offset": "0x1A",  "type": "byte"},
+      "Rarity":                           {"offset": "0x144", "type": "int", "notes": "from memory reading"}
+    }
+  },
+  "MinimapIcon": {
+    "byte_setter": "sub_141CB9570",
+    "string_anchor": "force_temporary",
+    "notes": "Uses bitfield at offset +0x40",
+    "fields": {
+      "start_hidden":                     {"offset": "0x40",  "type": "bit0"},
+      "hide_on_transition":               {"offset": "0x40",  "type": "bit1"},
+      "show_on_transition":               {"offset": "0x40",  "type": "bit1+2"},
+      "imitate_player":                   {"offset": "0x40",  "type": "bit3"},
+      "force_temporary":                  {"offset": "0x40",  "type": "bit4"}
+    }
+  },
+  "Transitionable": {
+    "int_setter": "sub_141D290F0",
+    "byte_setter": "sub_141D29240",
+    "string_anchor": "num_states",
+    "fields": {
+      "num_states":                       {"offset": "0xB0",  "type": "byte", "notes": "clamped 2-127"},
+      "transition_on_damage_taken":       {"offset": "0xB1",  "type": "byte"},
+      "link_to_instance_group_flag":      {"offset": "0xB2",  "type": "byte", "notes": "requires num_states==2"},
+      "transition_on_damage_from_any_team": {"offset": "0xB3", "type": "byte", "notes": "always set to 1"}
+    }
+  },
+  "DiesAfterTime": {
+    "float_setter": "sub_141CA3A80",
+    "string_anchor": "time_until_death",
+    "fields": {
+      "time_until_death":                 {"offset": "0x10",  "type": "float"}
+    }
+  },
+  "LimitedLifespan": {
+    "byte_setter": "sub_141CB79E0",
+    "string_anchor": "delete_when_animation_done",
+    "fields": {
+      "delete_when_animation_done":       {"offset": "0x10",  "type": "byte"},
+      "delete_on_sleep":                  {"offset": "0x11",  "type": "byte"}
+    }
+  },
+  "Player": {
+    "float_setter": "sub_141CF68B0",
+    "string_anchor": "wasd_turn_duration_override",
+    "fields": {
+      "wasd_turn_duration_override":      {"offset": "0x2C",  "type": "float"},
+      "PlayerName":                       {"offset": "0x1B0", "type": "StdWString", "notes": "from memory reading"},
+      "PlayerLevel":                      {"offset": "0x204", "type": "int", "notes": "from memory reading"}
+    }
+  },
+  "PetAi": {
+    "int_setter": "sub_141CF4C60",
+    "string_anchor": "idle_relaxed_chance",
+    "fields": {
+      "idle_relaxed_chance":              {"offset": "0x10",  "type": "int"}
+    }
+  },
+  "ControlZone": {
+    "byte_setter": "sub_141CD5270",
+    "string_anchor": "use_perpendicular_distance",
+    "notes": "Uses bitfields at +0x19 and +0x1A",
+    "fields": {
+      "require_line_of_sight":            {"offset": "0x19",  "type": "bit2"},
+      "use_manhattan_distance":           {"offset": "0x19",  "type": "bit3"},
+      "use_distance_to_edge":             {"offset": "0x19",  "type": "bit4"},
+      "use_perpendicular_distance":       {"offset": "0x19",  "type": "bit5"},
+      "trigger_on_hidden":                {"offset": "0x19",  "type": "bit6"},
+      "match_any_condition":              {"offset": "0x1A",  "type": "bit0"},
+      "match_non_collidable":             {"offset": "0x1A",  "type": "bit1"},
+      "orientation_rotates_trigger_area": {"offset": "0x1A",  "type": "bit2"},
+      "couch_coop_check_team_quest_flags": {"offset": "0x1A", "type": "bit3"},
+      "use_rect_area":                    {"offset": "0x40",  "type": "byte", "notes": "also sets +0x1A bit4"},
+      "use_line_area":                    {"offset": "0x51",  "type": "byte", "notes": "also sets +0x1A bit5"}
+    }
+  },
+  "ProximityTrigger": {
+    "byte_setter": "sub_141D10940",
+    "string_anchor": "multi_trigger",
+    "notes": "Extends ControlZone. Bitfield at +0xB4",
+    "fields": {
+      "multi_trigger":                    {"offset": "0xB4",  "type": "bit0"},
+      "trigger_all":                      {"offset": "0xB4",  "type": "bit5"},
+      "require_in_control_zone":          {"offset": "0xB4",  "type": "bit7"},
+      "once_per_player":                  {"offset": "0xB4",  "type": "bit0+3", "notes": "sets multi_trigger + bit3"},
+      "once_per_client":                  {"offset": "0xB4",  "type": "bit0+3+4", "notes": "sets multi_trigger + bit3 + bit4"},
+      "require_all_couch_coop_players":   {"offset": "0xB4",  "type": "bit6"},
+      "ignore_dead_players":              {"offset": "0xB5",  "type": "bit0"}
+    }
+  },
+  "DelveLight": {
+    "byte_setter": "sub_141CE4390",
+    "string_anchor": "always_powered",
+    "fields": {
+      "always_powered":                   {"offset": "0xA0",  "type": "byte"},
+      "emp_immune":                       {"offset": "0xA1",  "type": "byte"},
+      "is_art_light":                     {"offset": "0xA2",  "type": "byte"},
+      "is_flare":                         {"offset": "0xA3",  "type": "byte"},
+      "ignore_line_of_sight":             {"offset": "0xA4",  "type": "byte"},
+      "affected_by_player_stats":         {"offset": "0xA5",  "type": "byte"},
+      "affected_by_depth_scaling":        {"offset": "0xA6",  "type": "byte"},
+      "is_robot":                         {"offset": "0xA7",  "type": "byte"}
+    }
+  },
+  "HideoutDoodad": {
+    "byte_setter": "sub_141CA7750",
+    "string_anchor": "hide_variation_number",
+    "fields": {
+      "hide_variation_number":            {"offset": "0x10",  "type": "byte"},
+      "prevent_manual_variation_changing": {"offset": "0x11",  "type": "byte"}
+    }
+  },
+  "Magnetic": {
+    "float_setter": "sub_141CB8340",
+    "int_setter": "sub_141CB8450",
+    "byte_setter": "sub_141CB83A0",
+    "string_anchor": "magnet_strength",
+    "fields": {
+      "trigger_on_hidden":                {"offset": "0x40",  "type": "bit4"},
+      "magnet_strength":                  {"offset": "0x44",  "type": "float"},
+      "magnet_range":                     {"offset": "0x48",  "type": "int"},
+      "start_enabled":                    {"offset": "0x4C",  "type": "byte"}
+    }
+  },
+  "Monolith": {
+    "byte_setter": "sub_141CBA120",
+    "string_anchor": "is_mini_monolith",
+    "fields": {
+      "is_mini_monolith":                 {"offset": "0x10",  "type": "byte", "notes": "always set to 1"}
+    }
+  },
+  "WorldDescription": {
+    "byte_setter": "sub_14172C790",
+    "string_anchor": "force_show",
+    "fields": {
+      "pulse":                            {"offset": "0x110", "type": "byte"},
+      "force_show":                       {"offset": "0x111", "type": "byte"},
+      "visible":                          {"offset": "0x112", "type": "byte"},
+      "gamepad_can_select_description":   {"offset": "0x120", "type": "byte"},
+      "gamepad_hide_in_range_border":     {"offset": "0x121", "type": "byte"},
+      "show_stats":                       {"offset": "0x122", "type": "byte"}
+    }
+  },
+  "WobblePoint": {
+    "byte_setter": "sub_14172AA90",
+    "string_anchor": "is_elevator",
+    "fields": {
+      "is_elevator":                      {"offset": "0x36",  "type": "byte"}
+    }
+  },
+  "Wheels": {
+    "byte_setter": "sub_141729780",
+    "string_anchor": "always_moving",
+    "fields": {
+      "always_moving":                    {"offset": "0x28",  "type": "byte"}
+    }
+  },
+  "ClientBetrayalChoice": {
+    "int_setter": "sub_1416386E0",
+    "string_anchor": "npc_row_index",
+    "fields": {
+      "npc_row_index":                    {"offset": "0x10",  "type": "int"}
+    }
+  },
+  "HeistRewardDisplay": {
+    "int_setter": "sub_14172D120",
+    "string_anchor": "display_case_type_index",
+    "fields": {
+      "required_open_attempts":           {"offset": "0x10",  "type": "int"},
+      "display_case_type_index":          {"offset": "0x40",  "type": "int"}
+    }
+  },
+  "Sockets": {
+    "notes": "Socket/gem linking. Resolver at 0x1433e4df8. Internal struct — fields not exposed via .ot scripts. sub_1416BAC20 walks socket slots at +0x30 to +0x60. Socket color/type at element+0x10 (1=R,2=G,3=B,4=W). sub_1416EE3A0 handles socket rendering (1984 bytes, 28-case switch).",
+    "fields": {
+      "socket_slots_begin":               {"offset": "0x30",  "type": "ptr", "notes": "StdVector of socket slot pointers, 8 bytes each"},
+      "socket_slots_end":                 {"offset": "0x38",  "type": "ptr"},
+      "linked_group_begin":               {"offset": "0x60",  "type": "ptr", "notes": "StdVector of link group data"}
+    }
+  },
+  "Quality": {
+    "notes": "Item quality component. Resolver at 0x1433ef1d8. sub_140A40630 writes quality byte at +0x370, copies item data at +0x328 to +0x340.",
+    "fields": {
+      "quality_value":                    {"offset": "0x370", "type": "byte", "notes": "from sub_140A40630: a1[880] = a3"}
+    }
+  },
+  "Charges": {
+    "int_setter": "sub_142577A10",
+    "string_anchor": "max_charges",
+    "notes": "Flask/item charge tracking. DWORD-indexed (a1 typed as _DWORD*)",
+    "fields": {
+      "max_charges":                      {"offset": "0x10",  "type": "int", "notes": "also writes copy at +0x14"},
+      "current_charges":                  {"offset": "0x14",  "type": "int", "notes": "runtime value, initialized from max_charges"},
+      "charges_per_use":                  {"offset": "0x18",  "type": "int", "notes": "also writes copy at +0x1C"},
+      "charges_per_use_base":             {"offset": "0x1C",  "type": "int", "notes": "base value copy"}
+    }
+  }
+}

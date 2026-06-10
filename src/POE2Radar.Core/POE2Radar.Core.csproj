@@ -13,6 +13,9 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Game\CustomLandmarks.json" />
+    <EmbeddedResource Include="Game\entity_names.json" />
+    <EmbeddedResource Include="Game\world_areas.json" />
+    <EmbeddedResource Include="Game\zone_notes.json" />
   </ItemGroup>
 
 </Project>

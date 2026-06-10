@@ -29,4 +29,11 @@
     <EmbeddedResource Include="Web\default_watched.json" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="config\OtIdaOffsets.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             TargetPath="config\OtIdaOffsets.json" />
+  </ItemGroup>
+
 </Project>
