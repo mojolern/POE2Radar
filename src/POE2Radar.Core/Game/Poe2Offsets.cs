@@ -189,6 +189,26 @@ public static class Poe2
     {
         // ✓ validated live across 21 monsters (values 0 and 2 seen). Enum: 0=Normal,1=Magic,2=Rare,3=Unique.
         public const int Rarity = 0x144;
+        public const int Mods = 0x168;
+        public const int ModElemStride = 0x20;
+        public const int ModRecordPtr = 0x8;
+        public const int ModIdString = 0x0;
+    }
+
+    public static class WorldItemComponent
+    {
+        public const int ItemEntity = 0x28;
+    }
+
+    public static class RenderItemComponent
+    {
+        public const int ResourcePath = 0x28;
+    }
+
+    public static class ModsComponent
+    {
+        public const int Rarity = 0x94;
+        public const int Identified = 0x90;
     }
 
     /// <summary>Chest component. ✓ validated live (opened chest = 0, closed = 1 at +0x168).
@@ -364,12 +384,34 @@ public static class Poe2
     {
         public const int Self           = 0x08;  // ✓ self pointer
         public const int Children       = 0x10;  // ✓ StdVector of child UiElement pointers
+        public const int ChildrenEnd    = 0x18;
+        public const int Parent         = 0xB8;
+        public const int PositionModifier = 0xF0;
+        public const int RelativePos    = 0x118;
+        public const int LocalScaleMul  = 0x130;
         public const int Flags          = 0x180; // ✓ uint; IsVisibleLocal = bit 0x0B (toggle-diff: 0x2EF1↔0x26F1)
         public const int FlagVisibleBit = 0x0B;  // ✓ visible bit (set when shown)
+        public const int FlagModifyPosBit = 0x0A;
+        public const int ScaleIndex     = 0x18A;
+        public const int SizeW          = 0x288;
+        public const int SizeH          = 0x28C;
+        public const int Text           = 0x390;
+        public const double BaseResW = 2560.0;
+        public const double BaseResH = 1600.0;
         // Full visibility is hierarchical: an element is shown iff its own bit 0x0B AND every
         // ancestor's bit are set. Walk Parent up to UiRoot (Parent offset still TBD).
         // TODO: Position/Size offsets needed for pixel-perfect minimap overlay alignment.
         // Need to probe a known UiElement with CE to find screen rect floats.
+    }
+
+    public static class Runeforge
+    {
+        public static readonly uint[] PanelFlagFingerprints =
+            [0x00462EF1, 0x00502EF3, 0x00502EF7, 0x00542EF1, 0x00502EF1];
+        public const int GateStep = 0;
+        public const int ViewportStep = 2;
+        public const int ScrollOffset = 0x120;
+        public const int NameWString = 0x390;
     }
 
     /// <summary>Atlas/World Map UI fields discovered live by POE2Radar.Research --atlas-probe.</summary>

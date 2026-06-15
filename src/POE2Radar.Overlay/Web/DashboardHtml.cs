@@ -4,7 +4,7 @@ public static class DashboardHtml
 {
     public const string Page = """
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Radar Dashboard</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>POE2Radar Console</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#1a1a24;color:#e0e0e0;font-family:'Segoe UI',sans-serif;padding:16px;max-width:900px;margin:0 auto}
@@ -20,6 +20,7 @@ h2{font-size:14px;color:#78b4ff;margin:12px 0 6px}
 input[type=text]{background:#1e1e28;border:1px solid #444;color:#fff;padding:4px 8px;border-radius:4px;font-size:13px}
 input[type=color]{width:36px;height:24px;border:1px solid #555;background:#1e1e28;cursor:pointer;vertical-align:middle;border-radius:3px}
 input[type=number]{background:#1e1e28;border:1px solid #444;color:#fff;padding:4px 8px;border-radius:4px;width:80px;font-size:13px}
+select{background:#1e1e28;border:1px solid #444;color:#fff;padding:4px 6px;border-radius:4px;font-size:12px}
 input[type=range]{width:150px;vertical-align:middle}
 input.num-val{width:64px;background:#1e1e28;border:1px solid #444;color:#78b4ff;border-radius:3px;padding:2px 4px;font-size:12px;text-align:right}
 .search{margin-bottom:8px;display:flex;gap:8px;align-items:center}
@@ -85,19 +86,150 @@ tr.watched{background:#2a3a2a}
 .atlas-rule-row button.on{background:#314d32;color:#9f9;border-color:#5a8}
 .atlas-rule-row button.arrow.on{background:#4a3a12;color:#ffd76d;border-color:#b88}
 .atlas-rule-row button.rename{padding:2px 5px;color:#78b4ff}
+.display-rule{background:#252530;border:1px solid #393947;border-radius:6px;margin-bottom:6px;overflow:hidden}
+.display-rule.off{opacity:.55}
+.display-rule-head{display:grid;grid-template-columns:24px 24px minmax(100px,180px) minmax(120px,1fr) auto auto;gap:7px;align-items:center;padding:7px 9px;cursor:pointer}
+.display-rule-summary{font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.display-rule-body{border-top:1px solid #393947;padding:9px;display:grid;gap:8px}
+.display-rule-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:7px}
+.display-rule-grid label,.display-rule-flags label{font-size:11px;color:#aaa;display:flex;gap:5px;align-items:center}
+.display-rule-grid input[type=text],.display-rule-grid select{width:100%;min-width:0}
+.display-rule-flags{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.display-rule-cats{display:flex;gap:5px;flex-wrap:wrap}
+.display-rule-cats label{font-size:11px;background:#1e1e28;border:1px solid #444;border-radius:4px;padding:3px 6px}
+.display-rule-actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.display-rule-actions input[type=text]{min-width:130px;flex:1}
+.display-rule-order{display:flex;gap:3px}
+.display-rule-order .btn{padding:2px 6px;background:#30303d;color:#aaa}
+.display-rule-note{font-size:11px;color:#888;line-height:1.5}
+.price-status{font-size:11px;color:#aaa;background:#1e1e28;border-radius:4px;padding:7px 9px;margin-bottom:8px}
 @media(max-width:760px){
   .panel.panel-with-rail.active{display:block}
   .action-rail{position:sticky;bottom:8px;top:auto;flex-direction:row;flex-wrap:wrap;margin-top:10px}
   .action-rail .btn{width:auto}
 }
-</style></head><body>
-<h1>Radar Dashboard</h1>
-<div class="status" id="status">Connecting...</div>
 
+/* Unified console shell, adapted from Sikaka's dashboard while preserving this fork's tools. */
+:root{
+  --bg:#0a0907;--bg2:#100d09;--panel:#15110b;--panel2:#1b1610;
+  --line:#3a2f1d;--line-soft:#271f14;--ink:#e8dcc2;--ink-dim:#9c8e72;
+  --ink-faint:#6b5f49;--gold:#c8a049;--gold-bright:#ecca7e;--gold-deep:#8a6d34;
+  --blood:#9c342a;--blood-bright:#d6584a;--good:#79b06a;--magic:#7f93ff;
+  --rare:#f1e36b;--unique:#d2641e;--poi:#4bb3c4;--shadow:0 18px 40px -20px rgba(0,0,0,.9)
+}
+html,body{height:100%}
+body{
+  max-width:none;margin:0;padding:0;overflow:hidden;color:var(--ink);
+  background:radial-gradient(120% 90% at 50% -10%,#1a150d 0%,var(--bg) 58%) fixed;
+  font-family:Consolas,"Cascadia Mono",ui-monospace,monospace;font-size:13px;line-height:1.45
+}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:999;background:radial-gradient(120% 120% at 50% 40%,transparent 58%,rgba(0,0,0,.5) 100%);mix-blend-mode:multiply}
+.dashboard-shell{display:grid;grid-template-rows:auto minmax(0,1fr);height:100vh}
+.dashboard-header{
+  display:flex;align-items:center;gap:18px;padding:13px 24px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(30,24,14,.78),rgba(10,9,7,.82));min-width:0
+}
+.brand{display:flex;align-items:baseline;gap:12px;white-space:nowrap}
+.brand h1{font-family:Georgia,serif;font-size:21px;letter-spacing:.14em;color:var(--gold-bright);margin:0;text-shadow:0 1px #000,0 0 22px rgba(200,160,73,.22)}
+.brand small{font-size:9px;letter-spacing:.3em;text-transform:uppercase;color:var(--ink-faint)}
+.header-spacer{flex:1}
+.area-chip{font-family:Georgia,serif;letter-spacing:.06em;color:var(--ink);border:1px solid var(--line);padding:5px 13px;border-radius:2px;background:var(--panel);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:42vw}
+.connection{display:flex;align-items:center;gap:8px;color:var(--ink-dim);font-size:10px;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}
+.connection-dot{width:9px;height:9px;border-radius:50%;background:var(--blood)}
+.connection.live .connection-dot{background:var(--good);box-shadow:0 0 9px rgba(121,176,106,.55)}
+.dashboard-body{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:0}
+.dashboard-sidebar{overflow:auto;border-right:1px solid var(--line);padding:20px;background:linear-gradient(180deg,rgba(20,16,10,.64),transparent 240px)}
+.sidebar-section{font-family:Georgia,serif;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin:22px 0 10px;display:flex;align-items:center;gap:9px}
+.sidebar-section:after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+.vital{margin-bottom:14px}.vital-label{display:flex;justify-content:space-between;color:var(--ink-dim);font-size:10px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:5px}
+.vital-label b{color:var(--ink);font-weight:600}.vital-bar{height:8px;border:1px solid var(--line);background:#0c0a07;overflow:hidden}
+.vital-bar i{display:block;height:100%;transition:width .25s ease}.vital-bar.hp i{background:linear-gradient(90deg,#6e1f18,var(--blood-bright))}.vital-bar.mana i{background:linear-gradient(90deg,#23306e,var(--magic))}
+.side-kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dotted var(--line-soft);font-size:11px}
+.side-kv span:first-child{color:var(--ink-faint)}.side-kv span:last-child{color:var(--ink);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.census{display:grid;grid-template-columns:1fr 1fr;gap:7px}.census-item{border:1px solid var(--line-soft);background:var(--panel);padding:8px 9px}
+.census-item b{display:block;font-family:Georgia,serif;color:var(--gold-bright);font-size:19px;line-height:1}.census-item span{display:block;color:var(--ink-faint);font-size:8px;letter-spacing:.12em;text-transform:uppercase;margin-top:4px}
+#status{background:transparent;padding:0;margin:0;color:var(--ink-dim);font-size:11px;line-height:1.55}
+.dashboard-main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.dashboard-main>.tabs{flex:none;overflow-x:auto;flex-wrap:nowrap;gap:2px;margin:0;padding:13px 22px 0;border-bottom:1px solid var(--line);background:rgba(10,9,7,.45)}
+.dashboard-main>.tabs::-webkit-scrollbar{height:5px}
+.dashboard-main>.tabs .tab{flex:none;font-family:Georgia,serif;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);background:transparent;border:1px solid transparent;border-bottom:none;border-radius:3px 3px 0 0;padding:8px 13px;position:relative;top:1px}
+.dashboard-main>.tabs .tab:hover{color:var(--ink-dim)}
+.dashboard-main>.tabs .tab.active{color:var(--gold-bright);background:var(--panel);border-color:var(--line)}
+.panel{background:transparent;border-radius:0;padding:22px;min-height:0}
+.panel.active{display:block;overflow:auto;flex:1}
+.panel.panel-with-rail.active{overflow:auto;grid-template-columns:minmax(0,1fr) 116px}
+h2{font-family:Georgia,serif;font-size:13px;letter-spacing:.08em;color:var(--gold-bright)}
+.section{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow)}
+.section h3{font-family:Georgia,serif;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);margin-bottom:9px}
+.scrollbox{max-height:calc(100vh - 245px);border:1px solid var(--line-soft);background:rgba(12,10,7,.36)}
+table{color:var(--ink)}th{background:#0c0a07;color:var(--gold);font-size:9px;letter-spacing:.11em;text-transform:uppercase;padding:7px 9px;border-bottom:1px solid var(--line)}
+td{padding:6px 9px;border-bottom:1px solid var(--line-soft)}tr:hover{background:rgba(200,160,73,.05)}tr.watched{background:rgba(121,176,106,.08)}
+input[type=text],input[type=number],input[type=search],select,input.num-val{font-family:inherit;background:#0c0a07;border:1px solid var(--line);color:var(--ink);border-radius:2px}
+input:focus,select:focus{outline:none;border-color:var(--gold-deep)}
+input[type=range]{accent-color:var(--gold)}
+.btn,.filter-btn,.settings-subtab{font-family:inherit;border:1px solid var(--line);border-radius:2px;background:var(--panel2);color:var(--ink-dim)}
+.btn:hover,.filter-btn:hover,.settings-subtab:hover{border-color:var(--gold-deep);color:var(--ink)}
+.btn-save,.filter-btn.active,.settings-subtab.active{background:var(--gold-deep)!important;border-color:var(--gold)!important;color:#160f06!important}
+.btn-add{background:#263821;color:#9dcc8e;border-color:#47653d}.btn-rm{background:#3e1713;color:#ef8378;border-color:#6c2a24}
+.action-rail{top:0;background:var(--panel);border-color:var(--line);border-radius:4px}
+.saved{color:var(--good)}
+.settings-subtabs{top:-22px;background:var(--bg);padding:4px 0 10px}
+.display-rule,.watched-item,.add-form,.price-status{background:var(--panel2);border-color:var(--line);border-radius:3px}
+.display-rule-head{padding:9px 10px}.display-rule-body{border-color:var(--line-soft);padding:12px}.display-rule-summary,.display-rule-note,.atlas-muted,.mechanic-match,.auto-refresh{color:var(--ink-faint)}
+.display-rule-grid label{flex-direction:column;align-items:stretch;gap:4px}
+.display-rule-grid label:has(input[type=checkbox]){flex-direction:row;align-items:center}
+.display-rule-cats label{background:#0c0a07;border-color:var(--line)}
+.source-awake{background:#173d2a;color:#7fffb2}.source-sleeping{background:#332744;color:#d6b8ff}
+.cat{border:1px solid currentColor;background:transparent!important}.cat-Monster{color:#e26559}.cat-Player{color:#5ec4dd}.cat-Npc{color:#dbc55c}.cat-Chest{color:#e69a45}.cat-Transition{color:#7bcf8b}.cat-Other{color:#aaa}
+.rarity-Magic{color:var(--magic)}.rarity-Rare{color:var(--rare)}.rarity-Unique{color:var(--unique)}
+.atlas-rule-row{border-color:var(--line-soft)}.atlas-rule-row button{background:#0c0a07;border-color:var(--line);color:var(--ink-dim)}
+.atlas-rule-row[style]{background:#0c0a07!important;color:var(--gold)!important}
+#inspEntitySummary{background:var(--panel2)!important;border-color:var(--line)!important}
+#inspComponents span[style*="background"]{background:#0c0a07!important;border:1px solid var(--line);border-radius:2px!important;color:var(--ink-dim)!important}
+#inspResults h3{color:var(--gold-bright)!important}
+#inspResults table{background:rgba(12,10,7,.42)}
+#inspEntity+button{font-family:inherit;padding:5px 12px!important;cursor:pointer;background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:2px}
+code{color:var(--gold-bright)}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:5px;border:2px solid var(--bg)}::-webkit-scrollbar-track{background:transparent}
+@media(max-width:900px){
+  .dashboard-body{grid-template-columns:1fr}.dashboard-sidebar{display:none}.dashboard-header{padding:11px 14px}.brand small{display:none}.area-chip{max-width:48vw}
+  .panel{padding:14px}.dashboard-main>.tabs{padding-left:12px}.panel.panel-with-rail.active{display:block}.action-rail{position:sticky;bottom:0;top:auto;flex-direction:row;flex-wrap:wrap;margin-top:10px}
+}
+@media(max-width:560px){.area-chip{display:none}.dashboard-header{gap:10px}.brand h1{font-size:17px}.display-rule-head{grid-template-columns:22px 18px minmax(90px,1fr) auto auto}.display-rule-summary{display:none}}
+</style></head><body>
+<div class="dashboard-shell">
+<header class="dashboard-header">
+  <div class="brand"><h1>POE2RADAR</h1><small>Field Console</small></div>
+  <div class="header-spacer"></div>
+  <div class="area-chip" id="areaChip">Waiting for game</div>
+  <div class="connection" id="connection"><span class="connection-dot"></span><span id="connectionText">offline</span></div>
+</header>
+<div class="dashboard-body">
+<aside class="dashboard-sidebar">
+  <div class="vital"><div class="vital-label"><span>Life</span><b id="sideHp">--</b></div><div class="vital-bar hp"><i id="sideHpBar" style="width:0"></i></div></div>
+  <div class="vital"><div class="vital-label"><span>Mana</span><b id="sideMana">--</b></div><div class="vital-bar mana"><i id="sideManaBar" style="width:0"></i></div></div>
+  <div class="sidebar-section">Zone</div>
+  <div class="side-kv"><span>Area</span><span id="sideArea">--</span></div>
+  <div class="side-kv"><span>Code</span><span id="sideCode">--</span></div>
+  <div class="side-kv"><span>Act / Level</span><span id="sideLevel">--</span></div>
+  <div class="side-kv"><span>Map</span><span id="sideMap">--</span></div>
+  <div class="side-kv"><span>Auto-flask</span><span id="sideFlask">--</span></div>
+  <div class="sidebar-section">Census</div>
+  <div class="census">
+    <div class="census-item"><b id="sideEntities">0</b><span>Entities</span></div>
+    <div class="census-item"><b id="sideMonsters">0</b><span>Monsters</span></div>
+    <div class="census-item"><b id="sideChests">0</b><span>Chests</span></div>
+    <div class="census-item"><b id="sideNpcs">0</b><span>NPCs</span></div>
+  </div>
+  <div class="sidebar-section">Connection</div>
+  <div class="status" id="status">Connecting...</div>
+</aside>
+<main class="dashboard-main">
 <div class="tabs">
   <button class="tab active" onclick="showTab('entities')">Live Entities</button>
   <button class="tab" onclick="showTab('watched')">Watched</button>
   <button class="tab" onclick="showTab('database')">Database</button>
+  <button class="tab" onclick="showTab('display')">Display Rules</button>
   <button class="tab" onclick="showTab('settings')">Radar Settings</button>
   <button class="tab" onclick="showTab('rules')">Auto-Skills</button>
   <button class="tab" onclick="showTab('pathing')">Pathing</button>
@@ -156,6 +288,49 @@ tr.watched{background:#2a3a2a}
   <div class="scrollbox"><table><thead>
     <tr><th>Category</th><th>Path</th><th></th></tr>
   </thead><tbody id="dbBody"></tbody></table></div>
+</div>
+
+<!-- DISPLAY RULES -->
+<div class="panel panel-with-rail" id="tab-display">
+  <div class="panel-main">
+    <div class="panel-title">
+      <h2 style="margin:0">Display Rules</h2>
+      <span class="display-rule-note">Ordered top-to-bottom; first enabled match wins.</span>
+    </div>
+    <div class="section">
+      <h3>Entity And Tile Rules</h3>
+      <p class="display-rule-note" style="margin-bottom:8px">Blank matcher fields mean any. Metadata and mod fields accept comma-separated terms. Tile rules match terrain paths.</p>
+      <datalist id="knownMods"></datalist>
+      <div id="displayRuleList"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn btn-add" onclick="addDisplayRule()">Add Blank Rule</button>
+        <button class="btn" style="background:#2a4a5a;color:#5cf" onclick="addDisplayRuleFromEntity()">Add From Live Entity</button>
+      </div>
+    </div>
+    <div class="section">
+      <h3>Ground Item Pricing</h3>
+      <div class="price-status" id="priceStatus">Price source not loaded.</div>
+      <div class="display-rule-grid">
+        <label><input type="checkbox" id="priceEnabled"> Show priced ground items</label>
+        <label><input type="checkbox" id="priceRuneforge"> Show Runeforge values</label>
+        <label>Highlight minimum (ex)<input type="number" id="priceMin" min="0" step="0.5"></label>
+        <label>Unique minimum (ex)<input type="number" id="priceUniqueMin" min="0" step="0.5"></label>
+        <label>Minimum stack quantity<input type="number" id="priceQty" min="1" step="1"></label>
+        <label>League override<input type="text" id="priceLeague" placeholder="Auto-detect"></label>
+      </div>
+      <div class="display-rule-flags" style="margin-top:8px">
+        <label><input type="checkbox" class="price-cat" value="Uniques"> Uniques</label>
+        <label><input type="checkbox" class="price-cat" value="Runes"> Runes</label>
+        <label><input type="checkbox" class="price-cat" value="Essences"> Essences</label>
+        <label><input type="checkbox" class="price-cat" value="Currency"> Currency</label>
+      </div>
+    </div>
+  </div>
+  <div class="action-rail">
+    <span class="saved" id="displaySavedMsg">Saved!</span>
+    <button class="btn btn-save" onclick="saveDisplayPage()">Save</button>
+    <button class="btn" style="background:#2a4a5a;color:#5cf" onclick="loadDisplayPage()">Reload</button>
+  </div>
 </div>
 
 <!-- RADAR SETTINGS -->
@@ -360,18 +535,26 @@ tr.watched{background:#2a3a2a}
   <div class="scrollbox" id="inspResults" style="font-size:12px"></div>
 </div>
 
+</main>
+</div>
+</div>
+
 <script>
-let entities=[],watched=[],landmarks=[],db=[],settings={},catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set();
+let entities=[],watched=[],landmarks=[],db=[],settings={},displayRules=[],knownMods=[],catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set();
 let atlasRuleFilterTrack=false, atlasRuleFilterArrow=false;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,"\\'").replace(/"/g,'&quot;');
 
 function showTab(name){
+  const panel=$('tab-'+name);
+  if(!panel)return;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   [...document.querySelectorAll('.tab')].find(t=>t.textContent.toLowerCase().includes(name.slice(0,4))||t.getAttribute('onclick')?.includes(name))?.classList.add('active');
-  $('tab-'+name).classList.add('active');
+  panel.classList.add('active');
+  try{localStorage.setItem('radarActiveTab',name)}catch{}
   if(name==='watched')refreshWatched();
+  if(name==='display')loadDisplayPage();
   if(name==='rules')refreshRules();
   if(name==='pathing')refreshPathing();
   if(name==='landmarks')refreshLandmarks();
@@ -390,13 +573,39 @@ function showTab(name){
 async function refresh(){
   try{
     const s=await(await fetch('/state')).json();
+    updateConsoleState(s);
     $('status').innerHTML=s.inGame
       ?`<span style="color:#fff">${s.areaName||s.areaCode}</span> <span style="color:#888">(${s.areaCode} · Act ${s.act||'?'} · lvl ${s.areaLevel}${s.isTown?' · Town':''}${s.hasWaypoint?' · WP':''})</span> | ${s.player?.name||''} Lv${s.player?.level||'?'} | HP ${s.hpPct.toFixed(0)}% | Entities: ${s.entityCount}`
       :'Waiting for in-game...';
     const alive=$('aliveOnly').checked?'&alive=true':'';
     entities=await(await fetch('/entities?limit=1000'+alive)).json();
     renderEntities();
-  }catch(e){$('status').textContent='Connection lost';}
+  }catch(e){
+    $('status').textContent='Connection lost. Retrying automatically.';
+    $('connection').classList.remove('live');
+    $('connectionText').textContent='offline';
+    $('areaChip').textContent='Waiting for API';
+  }
+}
+function updateConsoleState(s){
+  const hp=Math.max(0,Math.min(100,Number(s.hpPct)||0));
+  const mana=Math.max(0,Math.min(100,Number(s.manaPct)||0));
+  $('connection').classList.add('live');
+  $('connectionText').textContent=s.inGame?'live':'attached';
+  $('areaChip').textContent=s.inGame?`${s.areaName||s.areaCode||'Unknown area'} | ${s.player?.name||'Player'}`:'Waiting for in-game';
+  $('sideHp').textContent=s.inGame?`${hp.toFixed(0)}%`:'--';
+  $('sideMana').textContent=s.inGame?`${mana.toFixed(0)}%`:'--';
+  $('sideHpBar').style.width=(s.inGame?hp:0)+'%';
+  $('sideManaBar').style.width=(s.inGame?mana:0)+'%';
+  $('sideArea').textContent=s.areaName||'--';
+  $('sideCode').textContent=s.areaCode||'--';
+  $('sideLevel').textContent=s.inGame?`${s.act||'?'} / ${s.areaLevel||'?'}`:'--';
+  $('sideMap').textContent=s.mapVisible?'Open':'Closed';
+  $('sideFlask').textContent=s.autoFlask?(s.flask||'Armed'):'Off';
+  $('sideEntities').textContent=s.entityCount||0;
+  $('sideMonsters').textContent=s.counts?.Monster||0;
+  $('sideChests').textContent=s.counts?.Chest||0;
+  $('sideNpcs').textContent=s.counts?.Npc||0;
 }
 function renderEntities(){
   const search=$('search').value.toLowerCase();
@@ -441,6 +650,166 @@ async function navigateTo(meta){
 }
 
 // ── WATCHED ──
+// -- DISPLAY RULES --
+const displayCategories=['Monster','Chest','Npc','Object','Other','Transition','Player','Tile'];
+const displayConditions=[
+  ['rarity','Rarity',['Normal','Magic','Rare','Unique']],
+  ['reaction','Reaction',['Hostile','Friendly']],
+  ['life','Life',['Alive','Dead']],
+  ['chest','Chest',['Opened','Unopened']],
+  ['poi','POI',['Yes','No']],
+  ['encounter','Encounter',['Active','Complete']]
+];
+function displaySummary(r){
+  const parts=[(r.categories||[]).length?(r.categories||[]).join('/'):'any type'];
+  if((r.match||[]).length)parts.push((r.match||[]).join(', '));
+  if((r.mods||[]).length)parts.push('mods: '+(r.mods||[]).join(', '));
+  displayConditions.forEach(([key])=>{if(r[key])parts.push(r[key]);});
+  return parts.join(' | ');
+}
+function displaySelect(index,key,label,options,current){
+  return `<label>${label}<select onchange="setDisplayRule(${index},'${key}',this.value||null)"><option value="">Any</option>${
+    options.map(x=>`<option value="${x}" ${current===x?'selected':''}>${x}</option>`).join('')
+  }</select></label>`;
+}
+function renderDisplayRules(){
+  const host=$('displayRuleList');
+  if(!host)return;
+  if(!displayRules.length){
+    host.innerHTML='<div class="display-rule-note">No rules configured. Entities will not draw until a rule matches them.</div>';
+    return;
+  }
+  host.innerHTML=displayRules.map((r,i)=>{
+    const open=!!r._open;
+    const body=open?`<div class="display-rule-body">
+      <div class="display-rule-grid">
+        <label>Name<input type="text" value="${esc(r.name||'')}" onchange="setDisplayRule(${i},'name',this.value)"></label>
+        <label>Metadata terms<input type="text" value="${esc((r.match||[]).join(', '))}" onchange="setDisplayList(${i},'match',this.value)"></label>
+        <label>Monster mods<input type="text" list="knownMods" value="${esc((r.mods||[]).join(', '))}" onchange="setDisplayList(${i},'mods',this.value)"></label>
+        ${displayConditions.map(([k,l,o])=>displaySelect(i,k,l,o,r[k])).join('')}
+      </div>
+      <div class="display-rule-cats">${displayCategories.map(c=>`<label><input type="checkbox" ${r.categories?.includes(c)?'checked':''} onchange="toggleDisplayCategory(${i},'${c}',this.checked)"> ${c}</label>`).join('')}</div>
+      <div class="display-rule-actions">
+        <label><input type="checkbox" ${r.hide?'checked':''} onchange="setDisplayRule(${i},'hide',this.checked)"> Hide</label>
+        <label>Shape <select onchange="setDisplayRule(${i},'shape',this.value)">${['Circle','Diamond','Square','Triangle','Star','Plus'].map(x=>`<option ${r.shape===x?'selected':''}>${x}</option>`).join('')}</select></label>
+        <input type="color" value="${r.color||'#ffffff'}" title="Color" onchange="setDisplayRule(${i},'color',this.value)">
+        <label>Opacity <input type="number" min="0" max="1" step="0.05" value="${r.opacity??1}" onchange="setDisplayRule(${i},'opacity',parseFloat(this.value))"></label>
+        <label>Size <input type="number" min="0.5" max="100" step="0.5" value="${r.size??3}" onchange="setDisplayRule(${i},'size',parseFloat(this.value))"></label>
+        <input type="text" value="${esc(r.label||'')}" placeholder="Optional label" onchange="setDisplayRule(${i},'label',this.value||null)">
+        <label><input type="checkbox" ${r.navigable?'checked':''} onchange="setDisplayRule(${i},'navigable',this.checked)"> Auto-path</label>
+      </div>
+    </div>`:'';
+    return `<div class="display-rule ${r.enabled===false?'off':''}">
+      <div class="display-rule-head" onclick="toggleDisplayOpen(${i},event)">
+        <input type="checkbox" ${r.enabled!==false?'checked':''} title="Enabled" onclick="event.stopPropagation()" onchange="setDisplayRule(${i},'enabled',this.checked,true)">
+        <span style="color:${r.color||'#fff'}">${r.hide?'X':'O'}</span>
+        <strong>${esc(r.name||'(unnamed)')}</strong>
+        <span class="display-rule-summary">${esc(displaySummary(r))}</span>
+        <div class="display-rule-order" onclick="event.stopPropagation()"><button class="btn" onclick="moveDisplayRule(${i},-1)">Up</button><button class="btn" onclick="moveDisplayRule(${i},1)">Down</button></div>
+        <button class="btn btn-rm" onclick="event.stopPropagation();removeDisplayRule(${i})">X</button>
+      </div>${body}</div>`;
+  }).join('');
+}
+function toggleDisplayOpen(i,e){if(e?.target?.closest('input,button,select,label'))return;displayRules[i]._open=!displayRules[i]._open;renderDisplayRules();}
+let displaySaveTimer=null;
+function queueDisplaySave(){
+  clearTimeout(displaySaveTimer);
+  $('displaySavedMsg').textContent='Saving...';
+  $('displaySavedMsg').classList.add('show');
+  displaySaveTimer=setTimeout(saveDisplayRulesOnly,350);
+}
+async function saveDisplayRulesOnly(){
+  const clean=displayRules.map(({_open,...r})=>r);
+  try{
+    await fetch('/api/display-rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(clean)});
+    $('displaySavedMsg').textContent='Saved';
+    setTimeout(()=>$('displaySavedMsg').classList.remove('show'),900);
+  }catch(e){
+    $('displaySavedMsg').textContent='Save failed';
+  }
+}
+function setDisplayRule(i,key,value,rerender=false){displayRules[i][key]=value;if(rerender)renderDisplayRules();queueDisplaySave();}
+function setDisplayList(i,key,value){displayRules[i][key]=value.split(',').map(x=>x.trim()).filter(Boolean);queueDisplaySave();}
+function toggleDisplayCategory(i,category,on){
+  const cats=new Set(displayRules[i].categories||[]);
+  if(on)cats.add(category);else cats.delete(category);
+  displayRules[i].categories=[...cats];
+  queueDisplaySave();
+}
+function moveDisplayRule(i,delta){
+  const to=i+delta;if(to<0||to>=displayRules.length)return;
+  [displayRules[i],displayRules[to]]=[displayRules[to],displayRules[i]];
+  renderDisplayRules();
+  queueDisplaySave();
+}
+function removeDisplayRule(i){displayRules.splice(i,1);renderDisplayRules();queueDisplaySave();}
+function addDisplayRule(){
+  displayRules.push({enabled:true,name:'New rule',categories:[],match:[],mods:[],hide:false,shape:'Circle',color:'#ffd926',opacity:1,size:4,navigable:false,_open:true});
+  renderDisplayRules();
+  queueDisplaySave();
+}
+function addDisplayRuleFromEntity(){
+  const query=prompt('Search live entity name or metadata:','');
+  if(query===null)return;
+  const q=query.trim().toLowerCase();
+  const matches=entities.filter(e=>!q||(e.name||'').toLowerCase().includes(q)||(e.metadata||'').toLowerCase().includes(q)).slice(0,20);
+  if(!matches.length){alert('No matching live entity. Refresh Live Entities and try again.');return;}
+  let choice=0;
+  if(matches.length>1){
+    const selected=prompt(matches.map((e,i)=>`${i+1}. ${e.name||e.metadata} [${e.category}]`).join('\n')+'\n\nEnter number:','1');
+    if(selected===null)return;
+    choice=Math.max(0,Math.min(matches.length-1,(parseInt(selected)||1)-1));
+  }
+  const e=matches[choice],term=(e.metadata||'').split('/').pop().replace(/@\d+$/,'');
+  displayRules.unshift({enabled:true,name:e.name||term,categories:[e.category],match:[term],mods:[],hide:false,shape:'Star',color:'#ffd926',opacity:1,size:6,navigable:false,_open:true});
+  renderDisplayRules();
+  queueDisplaySave();
+}
+async function loadDisplayPage(){
+  try{
+    const [rules,mods,radar,prices]=await Promise.all([
+      fetch('/api/display-rules').then(r=>r.json()),
+      fetch('/api/mods').then(r=>r.json()),
+      fetch('/api/settings').then(r=>r.json()),
+      fetch('/api/prices').then(r=>r.json())
+    ]);
+    displayRules=Array.isArray(rules)?rules:[];
+    knownMods=mods.mods||[];
+    $('knownMods').innerHTML=knownMods.map(m=>`<option value="${esc(m)}">`).join('');
+    settings=radar;
+    const g=settings.groundItems||{};
+    $('priceEnabled').checked=!!g.enabled;
+    $('priceRuneforge').checked=!!g.showRuneforgePrices;
+    $('priceMin').value=g.highlightMinEx??10;
+    $('priceUniqueMin').value=g.uniqueMinEx??5;
+    $('priceQty').value=g.minQuantity??2;
+    $('priceLeague').value=g.league||'';
+    document.querySelectorAll('.price-cat').forEach(c=>c.checked=(g.categories||[]).includes(c.value));
+    $('priceStatus').textContent=`${prices.loaded?'Loaded':'Waiting'} | ${prices.league||'auto league'} | ${prices.count||0} prices | ${prices.status||''}`;
+    renderDisplayRules();
+  }catch(e){$('priceStatus').textContent='Unable to load display controls: '+e;}
+}
+async function saveDisplayPage(){
+  const clean=displayRules.map(({_open,...r})=>r);
+  const groundItems={
+    enabled:$('priceEnabled').checked,
+    showRuneforgePrices:$('priceRuneforge').checked,
+    highlightMinEx:parseFloat($('priceMin').value)||0,
+    uniqueMinEx:parseFloat($('priceUniqueMin').value)||0,
+    minQuantity:parseInt($('priceQty').value)||1,
+    league:$('priceLeague').value.trim(),
+    categories:[...document.querySelectorAll('.price-cat:checked')].map(c=>c.value)
+  };
+  await Promise.all([
+    fetch('/api/display-rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(clean)}),
+    fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groundItems})})
+  ]);
+  displayRules=clean;
+  $('displaySavedMsg').classList.add('show');
+  setTimeout(()=>$('displaySavedMsg').classList.remove('show'),1500);
+  await loadDisplayPage();
+}
+
 async function quickWatch(meta){
   const parts=meta.split('/');const def=parts[parts.length-1].replace(/@\d+$/,'');
   const nick=prompt('Nickname for radar:',def);if(nick===null)return;
@@ -1478,6 +1847,10 @@ async function saveKeybinds(){
   $('kbSavedMsg').classList.add('show');setTimeout(()=>$('kbSavedMsg').classList.remove('show'),1500);
 }
 
+try{
+  const savedTab=localStorage.getItem('radarActiveTab');
+  if(savedTab&&$('tab-'+savedTab))showTab(savedTab);
+}catch{}
 refresh();refreshWatched();setInterval(refresh,2000);setInterval(inspAutoTick,2000);
 </script></body></html>
 """;

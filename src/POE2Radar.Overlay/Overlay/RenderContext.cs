@@ -17,6 +17,21 @@ public readonly record struct AtlasMark(
     string? Color = null,
     bool Arrow = false);
 
+public readonly record struct ItemLabel(
+    POE2Radar.Core.Game.Vector3 World,
+    string Name,
+    string Value,
+    bool Highlight,
+    bool ShowName);
+
+public readonly record struct RuneLabel(
+    float X,
+    float Y,
+    float W,
+    float H,
+    string Text,
+    uint Color);
+
 public sealed record RenderContext(
     bool InGame,
     bool Active,
@@ -60,7 +75,10 @@ public sealed record RenderContext(
     POE2Radar.Overlay.Web.GameDataService? GameData = null,
     Poe2Live.MinimapUi GameMinimap = default,
     POE2Radar.Overlay.Web.HiddenEntities? Hidden = null,
+    POE2Radar.Overlay.Web.DisplayRules? DisplayRules = null,
     POE2Radar.Core.Game.Vector3? PlayerWorld = null,
+    IReadOnlyList<ItemLabel>? ItemLabels = null,
+    IReadOnlyList<RuneLabel>? RuneLabels = null,
     IReadOnlyList<Poe2Atlas.AtlasNodeLive>? AtlasNodes = null,
     IReadOnlyList<AtlasMark>? AtlasMarks = null,
     string? AtlasLoadingText = null,

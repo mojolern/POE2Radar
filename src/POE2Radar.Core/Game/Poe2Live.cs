@@ -27,6 +27,8 @@ public sealed class Poe2Live
     private readonly Dictionary<nint, nint> _stateMachineAddr = new();
     private readonly Dictionary<nint, EntityCategory> _category = new();
     private readonly Dictionary<nint, string> _meta = new();
+    private readonly Dictionary<nint, string[]> _mods = new();
+    private readonly Dictionary<nint, (Rarity Rarity, string? Art, bool Identified)> _itemIdent = new();
     private readonly Dictionary<nint, nint> _iconAddr = new();     // entity → MinimapIcon component (0 = none); game POI
     private readonly Dictionary<nint, uint> _idAt = new();         // entity address → last-seen std::map key id (recycle guard)
     private readonly Dictionary<nint, long> _lifeRetryAt = new();
@@ -60,6 +62,11 @@ public sealed class Poe2Live
     private readonly byte[] _mapUiBytes = new byte[Poe2.MapUiElement.Zoom - Poe2.MapUiElement.Shift + sizeof(float)];
     private readonly float[] _camMatrix = new float[16];
     private readonly byte[] _atlasElementBytes = new byte[0x360];
+    private readonly byte[] _modVecBuf = new byte[24];
+    private int _modReadBudget;
+    private int _itemReadBudget;
+    private const int ModReadBudgetPerPass = 16;
+    private const int ItemReadBudgetPerPass = 12;
 
     // Persistent entity cache: remembers positions of important entities (transitions, NPCs, etc.)
     // so they stay visible on the radar after leaving the network bubble. Keyed by entity ID.
@@ -93,7 +100,8 @@ public sealed class Poe2Live
         bool Poi, byte Reaction, Rarity Rarity, bool Opened,
         bool IsBoss = false, bool IsTargetable = true, bool IsLocked = false, bool IsLarge = false,
         float Scale = 1f, int BaseSpeed = -1, LeagueMechanic League = LeagueMechanic.None,
-        bool IconComplete = false, bool IsSleeping = false, bool IsMechanicAnchor = false)
+        bool IconComplete = false, bool IsSleeping = false, bool IsMechanicAnchor = false,
+        IReadOnlyList<string>? Mods = null, string? ItemArt = null, bool ItemIdentified = true)
     {
         public bool IsAlive => LifeState is EntityLifeState.NotApplicable or EntityLifeState.Alive;
         public bool IsDead => LifeState == EntityLifeState.Dead;
@@ -103,6 +111,7 @@ public sealed class Poe2Live
         public float HpFraction => HpMax > 0 ? Math.Clamp((float)HpCur / HpMax, 0f, 1f) : 1f;
         public bool IsImmobile => BaseSpeed == 0;
         public bool IsLeagueMechanic => League != LeagueMechanic.None;
+        public IReadOnlyList<string> ModList => Mods ?? Array.Empty<string>();
     }
 
     public readonly record struct MapUi(bool IsVisible, float ShiftX, float ShiftY, float Zoom);
@@ -320,7 +329,7 @@ public sealed class Poe2Live
             _renderAddr.Clear(); _lifeAddr.Clear(); _posAddr.Clear(); _ompAddr.Clear(); _chestAddr.Clear();
             _monsterAddr.Clear(); _targetableAddr.Clear(); _pathfindingAddr.Clear();
             _stateMachineAddr.Clear();
-            _category.Clear(); _meta.Clear(); _iconAddr.Clear(); _idAt.Clear();
+            _category.Clear(); _meta.Clear(); _iconAddr.Clear(); _mods.Clear(); _itemIdent.Clear(); _idAt.Clear();
             _lifeRetryAt.Clear(); _lifeReadFailures.Clear(); _lastLife.Clear(); _deadSince.Clear();
             _completedIconIds.Clear();
             _essenceAnchorIds.Clear();
@@ -351,6 +360,8 @@ public sealed class Poe2Live
         _entQueue.Clear(); _entQueue.Enqueue(root);
         _entVisited.Clear();
         _seenEntityAddresses.Clear();
+        _modReadBudget = ModReadBudgetPerPass;
+        _itemReadBudget = ItemReadBudgetPerPass;
         while (_entQueue.Count > 0 && _entVisited.Count < 200000)
         {
             var node = _entQueue.Dequeue();
@@ -398,6 +409,12 @@ public sealed class Poe2Live
             baseSpeed = ReadBaseSpeed(entity);
 
             var metadata = _meta.GetValueOrDefault(entity, "");
+            var mods = cat == EntityCategory.Monster ? ReadMods(entity) : null;
+            string? itemArt = null;
+            var itemIdentified = true;
+            if (cat == EntityCategory.Other &&
+                metadata.Contains("WorldItem", StringComparison.Ordinal))
+                (rarity, itemArt, itemIdentified) = ReadItemIdentity(entity);
             var league = DetectLeague(metadata);
             var (poi, iconCompleteNow) = ReadIcon(entity);
             var likelyEssence = _essenceAnchorIds.Contains(id) ||
@@ -448,7 +465,8 @@ public sealed class Poe2Live
                 hpCur, hpMax, lifeState, deadForSeconds,
                 poi, ReadReaction(entity), rarity, opened,
                 isBoss, isTargetable, isLocked, isLarge, scale, baseSpeed, league, iconComplete,
-                IsSleeping: false, IsMechanicAnchor: mechanicAnchor);
+                IsSleeping: false, IsMechanicAnchor: mechanicAnchor,
+                Mods: mods, ItemArt: itemArt, ItemIdentified: itemIdentified);
             dots.Add(dot);
             liveIds.Add(id);
 
@@ -676,6 +694,7 @@ public sealed class Poe2Live
         _ompAddr.Remove(entity); _chestAddr.Remove(entity); _monsterAddr.Remove(entity);
         _targetableAddr.Remove(entity); _pathfindingAddr.Remove(entity); _stateMachineAddr.Remove(entity);
         _category.Remove(entity); _meta.Remove(entity); _iconAddr.Remove(entity);
+        _mods.Remove(entity); _itemIdent.Remove(entity);
         _lifeRetryAt.Remove(entity); _lifeReadFailures.Remove(entity);
         _lastLife.Remove(entity); _deadSince.Remove(entity); _idAt.Remove(entity);
     }
@@ -707,6 +726,131 @@ public sealed class Poe2Live
         if (!_reader.TryReadStruct<int>(omp + Poe2.ObjectMagicProperties.Rarity, out var r) || r is < 0 or > 3)
             return Rarity.Normal;
         return (Rarity)r;
+    }
+
+    private string[]? ReadMods(nint entity)
+    {
+        if (_mods.TryGetValue(entity, out var cached))
+            return cached.Length == 0 ? null : cached;
+        if (_modReadBudget <= 0) return null;
+
+        if (!_ompAddr.TryGetValue(entity, out var omp))
+        {
+            omp = ResolveComponent(entity, "ObjectMagicProperties");
+            _ompAddr[entity] = omp;
+        }
+        if (omp == 0)
+        {
+            _mods[entity] = Array.Empty<string>();
+            return null;
+        }
+        _modReadBudget--;
+
+        if (_reader.TryReadBytes(omp + Poe2.ObjectMagicProperties.Mods, _modVecBuf) < _modVecBuf.Length)
+            return null;
+        var first = (nint)BitConverter.ToInt64(_modVecBuf, 0);
+        var last = (nint)BitConverter.ToInt64(_modVecBuf, 8);
+        var bytes = (long)last - first;
+        if (first == 0 || bytes <= 0 || bytes > 0x4000 ||
+            bytes % Poe2.ObjectMagicProperties.ModElemStride != 0)
+        {
+            _mods[entity] = Array.Empty<string>();
+            return null;
+        }
+
+        var count = (int)(bytes / Poe2.ObjectMagicProperties.ModElemStride);
+        if (count > 100)
+        {
+            _mods[entity] = Array.Empty<string>();
+            return null;
+        }
+
+        var list = new List<string>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var record = Ptr(first + (nint)(
+                i * Poe2.ObjectMagicProperties.ModElemStride +
+                Poe2.ObjectMagicProperties.ModRecordPtr));
+            if (record == 0) continue;
+            var idAddress = Poe2.ObjectMagicProperties.ModIdString == 0
+                ? record
+                : Ptr(record + Poe2.ObjectMagicProperties.ModIdString);
+            if (idAddress == 0) continue;
+            var id = _reader.ReadStringUtf16(idAddress, 64);
+            if (LooksLikeModId(id) && !list.Contains(id, StringComparer.Ordinal))
+                list.Add(id);
+        }
+
+        var result = list.Count == 0 ? Array.Empty<string>() : list.ToArray();
+        _mods[entity] = result;
+        return result.Length == 0 ? null : result;
+    }
+
+    private (Rarity Rarity, string? Art, bool Identified) ReadItemIdentity(nint entity)
+    {
+        if (_itemIdent.TryGetValue(entity, out var cached)) return cached;
+        if (_itemReadBudget <= 0) return (Rarity.NonMonster, null, true);
+
+        var worldItem = ResolveComponent(entity, "WorldItem");
+        var item = worldItem == 0 ? 0 : Ptr(worldItem + Poe2.WorldItemComponent.ItemEntity);
+        if (item == 0)
+        {
+            var empty = (Rarity.NonMonster, (string?)null, true);
+            _itemIdent[entity] = empty;
+            return empty;
+        }
+        _itemReadBudget--;
+
+        var rarity = Rarity.NonMonster;
+        var identified = true;
+        var mods = ResolveComponent(item, "Mods");
+        if (mods != 0)
+        {
+            if (_reader.TryReadStruct<int>(mods + Poe2.ModsComponent.Rarity, out var r) &&
+                r is >= 0 and <= 3)
+                rarity = (Rarity)r;
+            if (_reader.TryReadStruct<int>(mods + Poe2.ModsComponent.Identified, out var id))
+                identified = id != 0;
+        }
+
+        string? art = null;
+        var renderItem = ResolveComponent(item, "RenderItem");
+        if (renderItem != 0)
+        {
+            var path = Ptr(renderItem + Poe2.RenderItemComponent.ResourcePath);
+            if (path != 0) art = ArtBasename(_reader.ReadStringUtf16(path, 128));
+        }
+
+        var result = (rarity, art, identified);
+        _itemIdent[entity] = result;
+        return result;
+    }
+
+    private static string? ArtBasename(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        var slash = path.LastIndexOf('/');
+        var start = slash >= 0 ? slash + 1 : 0;
+        var dot = path.LastIndexOf('.');
+        var end = dot > start ? dot : path.Length;
+        return end > start ? path[start..end] : null;
+    }
+
+    private static bool LooksLikeModId(string value)
+    {
+        if (value.Length is < 3 or > 64) return false;
+        var hasLetter = false;
+        foreach (var c in value)
+        {
+            if (char.IsAsciiLetter(c))
+            {
+                hasLetter = true;
+                continue;
+            }
+            if (char.IsAsciiDigit(c) || c == '_') continue;
+            return false;
+        }
+        return hasLetter;
     }
 
     private long ReadPrimaryStateValue(nint entity)

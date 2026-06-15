@@ -164,6 +164,7 @@ public sealed class OverlayRenderer : IDisposable
             {
                 DrawStatus(rt, ctx);
                 if (ctx.InGame && ctx.Radar?.ShowNameplates != false) DrawNameplates(rt, ctx);
+                if (ctx.InGame) DrawItemLabels(rt, ctx);
                 if (ctx.InGame && ctx.Radar?.ShowAtlasNodes == true && (ctx.AtlasMarks is { Count: > 0 } || ctx.AtlasNodes is { Count: > 0 }))
                     DrawAtlasNodes(rt, ctx);
                 if (ctx is { InGame: true, Map.IsVisible: true })
@@ -178,6 +179,7 @@ public sealed class OverlayRenderer : IDisposable
                     DrawZoneGuide(rt, ctx);
                 if (ctx.PathTargetName != null)
                     DrawPathTarget(rt, ctx);
+                if (ctx.InGame) DrawRuneforge(rt, ctx);
             }
         }
         finally
@@ -297,7 +299,9 @@ public sealed class OverlayRenderer : IDisposable
             foreach (var lm in ctx.Landmarks)
             {
                 if (poiHidden != null && (poiHidden.IsHidden(lm.Name) || poiHidden.IsHidden(lm.Path))) continue;
-                lines.Add(($"◆ {lm.Name}", _bLandmark!));
+                var tileRule = ctx.DisplayRules?.ResolveTile(lm.Path, requireMatch: false);
+                if (tileRule?.Hide == true) continue;
+                lines.Add(($"◆ {tileRule?.Label ?? lm.Name}", _bLandmark!));
             }
 
             // Quest pins
@@ -406,6 +410,64 @@ public sealed class OverlayRenderer : IDisposable
             rt.DrawRectangle(new Vortice.RawRectF(bx, by, bx + bw, by + bh), col, 1f);
         }
     }
+
+    private void DrawItemLabels(ID2D1RenderTarget rt, RenderContext ctx)
+    {
+        if (ctx.CameraMatrix is not { } m || ctx.ItemLabels is not { Count: > 0 } labels) return;
+        var width = ctx.WindowWidth;
+        var height = ctx.WindowHeight;
+        foreach (var item in labels)
+        {
+            var w = item.World;
+            var cw = w.X * m[3] + w.Y * m[7] + w.Z * m[11] + m[15];
+            if (cw <= 0.0001f) continue;
+            var cx = w.X * m[0] + w.Y * m[4] + w.Z * m[8] + m[12];
+            var cy = w.X * m[1] + w.Y * m[5] + w.Z * m[9] + m[13];
+            var sx = (cx / cw / 2f + 0.5f) * width;
+            var sy = (0.5f - cy / cw / 2f) * height;
+            if (sx < 0 || sx > width || sy < 0 || sy > height) continue;
+
+            var text = item.ShowName ? $"{item.Name}\n{item.Value}" : item.Value;
+            var longest = item.ShowName ? Math.Max(item.Name.Length, item.Value.Length) : item.Value.Length;
+            var halfW = MathF.Max(item.ShowName ? 48f : 26f, longest * 4.5f + 6f);
+            var halfH = item.ShowName ? 19f : 11f;
+            var panel = new Vortice.RawRectF(sx - halfW, sy - halfH, sx + halfW, sy + halfH);
+            rt.FillRectangle(panel, _bPanel!);
+            _bStyle!.Color = item.Highlight
+                ? new Color4(1f, 0.8f, 0.2f, 1f)
+                : new Color4(0.92f, 0.92f, 0.92f, 1f);
+            if (item.Highlight) rt.DrawRectangle(panel, _bStyle, 2f);
+            rt.DrawText(text, _tf!, new Rect(
+                panel.Left + 4f, panel.Top + 2f, panel.Right - 2f, panel.Bottom - 1f),
+                _bStyle, DrawTextOptions.Clip);
+        }
+    }
+
+    private void DrawRuneforge(ID2D1RenderTarget rt, RenderContext ctx)
+    {
+        if (ctx.RuneLabels is not { Count: > 0 } labels) return;
+        foreach (var label in labels)
+        {
+            const float gap = 8f;
+            const float boxW = 96f;
+            const float boxH = 22f;
+            var left = label.X + label.W + gap;
+            var centerY = label.Y + label.H * 0.5f;
+            var box = new Vortice.RawRectF(
+                left, centerY - boxH * 0.5f, left + boxW, centerY + boxH * 0.5f);
+            rt.FillRectangle(box, _bPanel!);
+            _bStyle!.Color = ColorFromPacked(label.Color);
+            rt.DrawText(label.Text, _tf!, new Rect(
+                box.Left + 5f, box.Top + 2f, box.Right - 2f, box.Bottom - 1f),
+                _bStyle, DrawTextOptions.Clip);
+        }
+    }
+
+    private static Color4 ColorFromPacked(uint value) => new(
+        ((value >> 16) & 0xFF) / 255f,
+        ((value >> 8) & 0xFF) / 255f,
+        (value & 0xFF) / 255f,
+        ((value >> 24) & 0xFF) / 255f);
 
     private void DrawGroundWaypoints(ID2D1RenderTarget rt, RenderContext ctx)
     {
@@ -868,6 +930,9 @@ public sealed class OverlayRenderer : IDisposable
         ctx.EntityScreenPositions?.Clear();
         foreach (var e in ctx.Entities)
         {
+            var displayRule = ctx.DisplayRules?.Resolve(e);
+            if (ctx.DisplayRules != null && displayRule == null) continue;
+            if (displayRule?.Hide == true) continue;
             var watchMatch = ctx.Watched?.Match(e.Metadata);
             var isWatched = watchMatch is { Enabled: true };
             var styles = rs?.Styles;
@@ -936,7 +1001,12 @@ public sealed class OverlayRenderer : IDisposable
                     continue;
             }
 
-            if (isWatched)
+            if (displayRule != null)
+            {
+                SetStyleBrush(displayRule.Color, displayRule.Opacity * deadAlpha);
+                (shapeName, r, brush) = (displayRule.Shape, displayRule.Size, _bStyle!);
+            }
+            else if (isWatched)
             {
                 SetStyleBrush(watchMatch!.Color, 1f);
                 (shapeName, r, brush) = ("Diamond", watchMatch.Size, _bStyle!);
@@ -1031,7 +1101,17 @@ public sealed class OverlayRenderer : IDisposable
             DrawStyledIcon(rt, shapeName, p, r, brush, filled: true);
             ctx.EntityScreenPositions?.Add((p.X, p.Y, e.Metadata));
 
-            if (isWatched)
+            if (!string.IsNullOrWhiteSpace(displayRule?.Label))
+            {
+                var fs = rs?.WatchedFontSize ?? 14f;
+                var tf = GetTextFormat(fs, ref _tfLandmark, ref _lastLmFs);
+                rt.DrawText(
+                    displayRule.Label,
+                    tf,
+                    new Rect(p.X + r + 4, p.Y - fs / 2, p.X + 300, p.Y + fs),
+                    brush);
+            }
+            else if (isWatched)
             {
                 rt.DrawEllipse(new Ellipse(p, r + 2, r + 2), _bText!, 1.5f);
                 if (rs?.ShowWatchedLabels != false &&
@@ -1128,18 +1208,25 @@ public sealed class OverlayRenderer : IDisposable
             _bLandmark.Color = new Color4(lr / 255f, lg / 255f, lb / 255f, 1f);
             _lastLandmarkColor = lmColor;
         }
-        var lmOutW = rs?.LandmarkOutlineWidth ?? 1.6f;
         ctx.LandmarkScreenPositions?.Clear();
         foreach (var lm in ctx.Landmarks)
         {
             if (hidden != null && (hidden.IsHidden(lm.Name) || hidden.IsHidden(lm.Path))) continue;
+            var tileRule = ctx.DisplayRules?.ResolveTile(lm.Path, requireMatch: false);
+            if (tileRule?.Hide == true) continue;
             var p = Project(new NumVec2(lm.Center.X, lm.Center.Y), player, center, scale);
-            var d = rs?.LandmarkIconSize ?? 5f;
-            var diamond = new[] { new NumVec2(p.X, p.Y - d), new NumVec2(p.X + d, p.Y), new NumVec2(p.X, p.Y + d), new NumVec2(p.X - d, p.Y) };
-            for (var i = 0; i < 4; i++) rt.DrawLine(diamond[i], diamond[(i + 1) % 4], _bLandmark!, lmOutW);
+            var d = tileRule?.Size ?? rs?.LandmarkIconSize ?? 5f;
+            var brush = _bLandmark!;
+            if (tileRule != null && _bStyle != null)
+            {
+                ParseHex(tileRule.Color, out var rr, out var rg, out var rb);
+                _bStyle.Color = new Color4(rr / 255f, rg / 255f, rb / 255f, Math.Clamp(tileRule.Opacity, 0f, 1f));
+                brush = _bStyle;
+            }
+            DrawStyledIcon(rt, tileRule?.Shape ?? "Diamond", p, d, brush, filled: false);
             if (rs?.ShowLandmarkLabels != false)
-                rt.DrawText(lm.Name, lmTf, new Rect(p.X + 7, p.Y - lmFs / 2, p.X + 300, p.Y + lmFs), _bLandmark!);
-            ctx.LandmarkScreenPositions?.Add((p.X, p.Y, lm.Center.X, lm.Center.Y, lm.Name));
+                rt.DrawText(tileRule?.Label ?? lm.Name, lmTf, new Rect(p.X + 7, p.Y - lmFs / 2, p.X + 300, p.Y + lmFs), brush);
+            ctx.LandmarkScreenPositions?.Add((p.X, p.Y, lm.Center.X, lm.Center.Y, tileRule?.Label ?? lm.Name));
         }
 
         skipLandmarks:
@@ -1359,6 +1446,9 @@ public sealed class OverlayRenderer : IDisposable
         var mmDotScale = rs.MinimapDotScale;
         foreach (var e in ctx.Entities)
         {
+            var displayRule = ctx.DisplayRules?.Resolve(e);
+            if (ctx.DisplayRules != null && displayRule == null) continue;
+            if (displayRule?.Hide == true) continue;
             var watched = ctx.Watched?.Match(e.Metadata);
             var isWatched = watched is { Enabled: true };
             var minimapMechanicStyle = rs.Styles != null ? MatchMechanic(rs.Styles, e.Metadata) : null;
@@ -1389,7 +1479,14 @@ public sealed class OverlayRenderer : IDisposable
             if (!isWatched && !e.IsTargetable && rs.HideUntargetable && !e.IsMechanicAnchor) continue;
             if (!isWatched && e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && !rs.ShowFriendlyEntities) continue;
             ID2D1SolidColorBrush? b; float r;
-            if (isWatched)
+            var minimapShape = "Circle";
+            if (displayRule != null)
+            {
+                SetStyleBrush(displayRule.Color, displayRule.Opacity);
+                (b, r) = (_bStyle, displayRule.Size * mmDotScale);
+                minimapShape = displayRule.Shape;
+            }
+            else if (isWatched)
             {
                 SetStyleBrush(watched!.Color, 1f);
                 (b, r) = (_bStyle, watched.Size * mmDotScale);
@@ -1438,11 +1535,17 @@ public sealed class OverlayRenderer : IDisposable
             }
             if (b == null) continue;
             var p = Project(new NumVec2(e.Grid.X, e.Grid.Y), player, center, mmScale);
-            rt.FillEllipse(new Ellipse(p, r, r), b);
+            DrawStyledIcon(rt, minimapShape, p, r, b, filled: true);
 
             // Minimap labels
             var mmLabelFs = rs.MinimapLabelFontSize;
-            if (isWatched &&
+            if (!string.IsNullOrWhiteSpace(displayRule?.Label))
+            {
+                var mmLabelTf = GetTextFormat(mmLabelFs, ref _tfTransition, ref _lastTrFs);
+                rt.DrawText(displayRule.Label, mmLabelTf, new Rect(
+                    p.X + r + 2, p.Y - mmLabelFs / 2, p.X + 150, p.Y + mmLabelFs), b);
+            }
+            else if (isWatched &&
                 rs.MinimapLabelWatched &&
                 (!minimapMechanic || rs.ShowMechanicLabels))
             {

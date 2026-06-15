@@ -280,6 +280,9 @@ public sealed class RadarSettings
     // Walkable-terrain bitmap colors/transparency
     public TerrainStyle Terrain { get; set; } = new();
 
+    // Live trade pricing and world-item labels
+    public GroundItemSettings GroundItems { get; set; } = new();
+
     // Map drawing
     public bool MapCenterOnPlayerScreen { get; set; } = true;
     public float MapCenterYShift { get; set; } = -20f;
@@ -397,6 +400,17 @@ public sealed class TerrainStyle
     public float EdgeOpacity { get; set; } = 0.706f;
 }
 
+public sealed class GroundItemSettings
+{
+    public bool Enabled { get; set; } = false;
+    public bool ShowRuneforgePrices { get; set; } = false;
+    public double HighlightMinEx { get; set; } = 10.0;
+    public double UniqueMinEx { get; set; } = 5.0;
+    public int MinQuantity { get; set; } = 2;
+    public string League { get; set; } = "";
+    public List<string> Categories { get; set; } = ["Uniques", "Runes", "Essences", "Currency"];
+}
+
 public sealed class RadarStyles
 {
     public IconStyle MonsterNormal { get; set; } = new("Circle",   "#FF3333", 0.95f, 2.6f);
@@ -421,6 +435,6 @@ public sealed class RadarStyles
         new() { Name = "Rogue Exile", Match = ["/RogueExiles/", "/AtlasExiles/"],   Shape = "Star",     Color = "#FF704D", Opacity = 1f, Size = 7f },
         new() { Name = "Strongbox",  Match = ["Strongbox", "StrongBoxes"],          Shape = "Square",   Color = "#FFB300", Opacity = 1f, Size = 6f },
         new() { Name = "Essence",    Match = ["Essence"],                           Shape = "Triangle", Color = "#33E0FF", Opacity = 1f, Size = 7f },
-        new() { Name = "Shrine",     Match = ["Shrine"],                            Shape = "Star",     Color = "#7DFF7D", Opacity = 1f, Size = 6f },
+        new() { Name = "Shrine",     Match = ["Metadata/Shrines/"],                  Shape = "Star",     Color = "#7DFF7D", Opacity = 1f, Size = 6f },
     };
 }

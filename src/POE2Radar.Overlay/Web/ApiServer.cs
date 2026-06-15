@@ -20,6 +20,9 @@ public sealed class ApiServer : IDisposable
     private readonly ComponentFieldReader? _inspector;
     private readonly EntityNameResolver _entityNames;
     private readonly GameDataService _gameData;
+    private readonly DisplayRules _displayRules;
+    private readonly ModCatalog _modCatalog;
+    private readonly Func<object> _prices;
     private readonly Func<object>? _atlasProvider;
     private readonly Action<IReadOnlyList<string>>? _setAtlasPins;
     private volatile bool _running;
@@ -38,6 +41,9 @@ public sealed class ApiServer : IDisposable
         ComponentFieldReader? inspector,
         EntityNameResolver entityNames,
         GameDataService gameData,
+        DisplayRules displayRules,
+        ModCatalog modCatalog,
+        Func<object> prices,
         Func<object>? atlasProvider = null,
         Action<IReadOnlyList<string>>? setAtlasPins = null,
         int port = 7777)
@@ -51,6 +57,9 @@ public sealed class ApiServer : IDisposable
         _inspector = inspector;
         _entityNames = entityNames;
         _gameData = gameData;
+        _displayRules = displayRules;
+        _modCatalog = modCatalog;
+        _prices = prices;
         _atlasProvider = atlasProvider;
         _setAtlasPins = setAtlasPins;
         _listener.Prefixes.Add($"http://localhost:{port}/");
@@ -146,6 +155,7 @@ public sealed class ApiServer : IDisposable
                     boss = e.IsBoss, league = e.League.ToString(), locked = e.IsLocked, large = e.IsLarge,
                     source = e.IsSleeping ? "Sleeping" : "Awake",
                     sleeping = e.IsSleeping, mechanicAnchor = e.IsMechanicAnchor, iconComplete = e.IconComplete,
+                    mods = e.ModList, itemArt = e.ItemArt, itemIdentified = e.ItemIdentified,
                     watched = _watched.IsWatched(e.Metadata),
                 });
                 WriteJson(ctx, list);
@@ -222,6 +232,35 @@ public sealed class ApiServer : IDisposable
                 }
                 break;
             }
+
+            case "/api/display-rules":
+            {
+                if (method == "GET")
+                {
+                    WriteJson(ctx, _displayRules.All);
+                }
+                else if (method == "POST")
+                {
+                    var rules = JsonSerializer.Deserialize<List<DisplayRule>>(ReadBody(ctx), Json);
+                    if (rules == null)
+                    {
+                        WriteJson(ctx, new { error = "bad json" }, 400);
+                        break;
+                    }
+                    _displayRules.Replace(rules.Take(500).Select(SanitizeDisplayRule));
+                    WriteJson(ctx, new { ok = true, count = _displayRules.Count });
+                }
+                else WriteJson(ctx, new { error = "method not allowed" }, 405);
+                break;
+            }
+
+            case "/api/mods":
+                WriteJson(ctx, new { mods = _modCatalog.All });
+                break;
+
+            case "/api/prices":
+                WriteJson(ctx, _prices());
+                break;
 
             case "/api/settings":
             {
@@ -552,6 +591,20 @@ public sealed class ApiServer : IDisposable
 
         address = (nint)value;
         return true;
+    }
+
+    private static DisplayRule SanitizeDisplayRule(DisplayRule rule)
+    {
+        rule.Name = (rule.Name ?? "").Trim();
+        rule.Shape = string.IsNullOrWhiteSpace(rule.Shape) ? "Circle" : rule.Shape.Trim();
+        rule.Color = string.IsNullOrWhiteSpace(rule.Color) ? "#FFFFFF" : rule.Color.Trim();
+        rule.Opacity = Math.Clamp(rule.Opacity, 0f, 1f);
+        rule.Size = Math.Clamp(rule.Size, 0.5f, 100f);
+        rule.Label = string.IsNullOrWhiteSpace(rule.Label) ? null : rule.Label.Trim();
+        rule.Categories = (rule.Categories ?? new()).Where(x => !string.IsNullOrWhiteSpace(x)).Take(16).ToList();
+        rule.Match = (rule.Match ?? new()).Where(x => !string.IsNullOrWhiteSpace(x)).Take(64).ToList();
+        rule.Mods = (rule.Mods ?? new()).Where(x => !string.IsNullOrWhiteSpace(x)).Take(64).ToList();
+        return rule;
     }
 
     private void ApplySettings(Dictionary<string, JsonElement> patch)
