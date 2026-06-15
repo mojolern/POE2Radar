@@ -19,6 +19,8 @@ public static class JunkFilter
         "/clone/",
         "playersummoned",
         "essencemoddaemons",
+        "expedition2encountercrack",
+        "runeencountercontroller",
         "tormentedspirits",
         "/daemon/",
         "bossroomminimapicon",

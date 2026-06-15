@@ -60,6 +60,21 @@ if (HasFlag(args, "--watch"))
 if (HasFlag(args, "--tiles"))
     return RunTiles(process, reader);
 
+if (HasFlag(args, "--mechanic-scan"))
+    return RunMechanicScan(
+        process,
+        reader,
+        TryGetIntArg(args, "--seconds") ?? 60,
+        TryGetIntArg(args, "--interval-ms") ?? 500,
+        HasFlag(args, "--mechanic-all"));
+
+if (HasFlag(args, "--component-layout-scan"))
+    return RunComponentLayoutScan(
+        process,
+        reader,
+        HasFlag(args, "--mechanic-all"),
+        TryGetIntArg(args, "--max-entities") ?? 100);
+
 if (HasFlag(args, "--rarity"))
     return RunRarity(process, reader);
 
@@ -91,6 +106,10 @@ Console.WriteLine("  --aob                      scan for IngameState via AOB pat
 Console.WriteLine("  --atlas-probe [--atlas-child N] [--atlas-dump-node 0xADDR]  discover Atlas panel/node UI candidates");
 Console.WriteLine("  --atlas-snapshot [--atlas-samples N]  validate the Core Atlas snapshot reader");
 Console.WriteLine("  --atlas-rect-scan [--atlas-samples N]  scan Atlas nodes for final screen/client rect offsets");
+Console.WriteLine("  --mechanic-scan [--seconds N] [--interval-ms N] [--mechanic-all]");
+Console.WriteLine("                             watch awake/sleeping mechanic entities and terrain clues");
+Console.WriteLine("  --component-layout-scan [--mechanic-all] [--max-entities N]");
+Console.WriteLine("                             discover StateMachine tables and magic-property mod vectors");
 return 0;
 
 // ── PoE2 entity / component-map probe ──────────────────────────────────────
@@ -463,19 +482,698 @@ static int RunTiles(ProcessHandle process, MemoryReader reader)
     return 0;
 }
 
-// ── Watch: poll as the player plays, logging an AreaInstance snapshot on every area
-// change so the area-hash/level offsets can be diffed out across zones. Resolves the
-// GameState slot once (AOB), then cheap chain derefs each poll. Run in the background and
-// inspect the log. Each area block also reads a few candidate fields so drift is obvious.
+// Mechanic scan: observe entity lifecycle across the awake and sleeping maps.
+// Watches both entity maps so mechanic discovery can distinguish data loaded with the area
+// from entities that only wake when the player approaches. This is deliberately read-only.
+static int RunMechanicScan(
+    ProcessHandle process,
+    MemoryReader reader,
+    int durationSeconds,
+    int intervalMs,
+    bool includeAll)
+{
+    intervalMs = Math.Clamp(intervalMs, 100, 10000);
+    durationSeconds = Math.Max(0, durationSeconds);
+
+    var stop = false;
+    ConsoleCancelEventHandler cancel = (_, e) =>
+    {
+        e.Cancel = true;
+        stop = true;
+    };
+    Console.CancelKeyPress += cancel;
+
+    Console.WriteLine();
+    Console.WriteLine("Mechanic lifecycle scan");
+    Console.WriteLine("-----------------------");
+    Console.WriteLine($"Duration      : {(durationSeconds == 0 ? "until Ctrl+C" : $"{durationSeconds}s")}");
+    Console.WriteLine($"Poll interval : {intervalMs}ms");
+    Console.WriteLine($"Filter        : {(includeAll ? "all real entities" : "mechanic metadata keywords")}");
+    Console.WriteLine("Legend        : NEW, AWAKE/SLEEPING transition, STATE change, GONE");
+
+    var slot = FindGameStateSlot(process, reader);
+    if (slot == 0)
+    {
+        Console.Error.WriteLine("Could not lock GameState slot (in game?).");
+        Console.CancelKeyPress -= cancel;
+        return 1;
+    }
+    var live = new Poe2Live(reader, slot);
+    Console.WriteLine($"GameState slot: 0x{slot:X16}");
+
+    const int MissingPollsBeforeGone = 6;
+    const int SourcePollsBeforeTransition = 2;
+    var known = new Dictionary<uint, MechanicProbeEntity>();
+    var missingPolls = new Dictionary<uint, int>();
+    var pendingSources = new Dictionary<uint, (string Source, int Polls)>();
+    nint previousArea = 0;
+    var started = Environment.TickCount64;
+    var nextSummary = started;
+
+    try
+    {
+        while (!stop && (durationSeconds == 0 || Environment.TickCount64 - started < durationSeconds * 1000L))
+        {
+            if (!live.TryResolve(out _, out var areaInstance, out var localPlayer))
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] chain unavailable; waiting...");
+                Thread.Sleep(intervalMs);
+                continue;
+            }
+
+            if (areaInstance != previousArea)
+            {
+                known.Clear();
+                missingPolls.Clear();
+                pendingSources.Clear();
+                previousArea = areaInstance;
+                Console.WriteLine();
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] AREA 0x{areaInstance:X16}");
+                PrintMechanicTerrainCandidates(reader, areaInstance);
+            }
+
+            var playerGrid = ReadEntityGrid(reader, localPlayer);
+            var current = ReadMechanicEntitySnapshot(reader, areaInstance, playerGrid, includeAll);
+            foreach (var (id, entity) in current.OrderBy(x => x.Value.Source).ThenBy(x => x.Key))
+            {
+                missingPolls.Remove(id);
+                if (!known.TryGetValue(id, out var old))
+                {
+                    PrintMechanicEvent("NEW", entity);
+                    known[id] = entity;
+                    continue;
+                }
+
+                if (!string.Equals(old.Source, entity.Source, StringComparison.Ordinal))
+                {
+                    var pending = pendingSources.GetValueOrDefault(id);
+                    pending = pending.Source == entity.Source
+                        ? (entity.Source, pending.Polls + 1)
+                        : (entity.Source, 1);
+                    pendingSources[id] = pending;
+                    if (pending.Polls >= SourcePollsBeforeTransition)
+                    {
+                        PrintMechanicEvent(entity.Source.ToUpperInvariant(), entity);
+                        pendingSources.Remove(id);
+                        old = entity;
+                    }
+                }
+                else
+                {
+                    pendingSources.Remove(id);
+                }
+
+                if (old.IconComplete != entity.IconComplete ||
+                    !string.Equals(old.LifeState, entity.LifeState, StringComparison.Ordinal) ||
+                    !string.Equals(old.StateValues, entity.StateValues, StringComparison.Ordinal))
+                    PrintMechanicEvent("STATE", entity);
+
+                // Heap addresses can change while a sleeping entity keeps the same stable map id.
+                // Refresh the observation silently so address rebinding does not become NEW/GONE noise.
+                known[id] = entity with { Source = old.Source == entity.Source ? entity.Source : old.Source };
+            }
+
+            foreach (var (id, old) in known.ToArray())
+                if (!current.ContainsKey(id))
+                {
+                    var polls = missingPolls.GetValueOrDefault(id) + 1;
+                    if (polls < MissingPollsBeforeGone)
+                    {
+                        missingPolls[id] = polls;
+                        continue;
+                    }
+                    PrintMechanicEvent("GONE", old);
+                    known.Remove(id);
+                    missingPolls.Remove(id);
+                    pendingSources.Remove(id);
+                }
+
+            var now = Environment.TickCount64;
+            if (now >= nextSummary)
+            {
+                var awake = current.Values.Count(x => x.Source == "awake");
+                var sleeping = current.Values.Count(x => x.Source == "sleeping");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] summary awake={awake} sleeping={sleeping} total={current.Count}");
+                nextSummary = now + 5000;
+            }
+            Thread.Sleep(intervalMs);
+        }
+    }
+    finally
+    {
+        Console.CancelKeyPress -= cancel;
+    }
+
+    Console.WriteLine("Mechanic scan finished.");
+    return 0;
+}
+
+static Dictionary<uint, MechanicProbeEntity> ReadMechanicEntitySnapshot(
+    MemoryReader reader,
+    nint areaInstance,
+    System.Numerics.Vector2? playerGrid,
+    bool includeAll)
+{
+    var result = new Dictionary<uint, MechanicProbeEntity>();
+    ReadMechanicEntityMap(reader, areaInstance, Poe2.AreaInstance.SleepingEntities, "sleeping", playerGrid, includeAll, result);
+    ReadMechanicEntityMap(reader, areaInstance, Poe2.AreaInstance.AwakeEntities, "awake", playerGrid, includeAll, result);
+    return result;
+}
+
+static void ReadMechanicEntityMap(
+    MemoryReader reader,
+    nint areaInstance,
+    int mapOffset,
+    string source,
+    System.Numerics.Vector2? playerGrid,
+    bool includeAll,
+    Dictionary<uint, MechanicProbeEntity> result)
+{
+    var head = SafePtr(reader, areaInstance + mapOffset);
+    if (head == 0 ||
+        !reader.TryReadStruct<int>(areaInstance + mapOffset + 8, out var size) ||
+        size is <= 0 or > 200000)
+        return;
+
+    var root = SafePtr(reader, head + Poe2.StdMapNode.Parent);
+    var queue = new Queue<nint>();
+    var visited = new HashSet<nint>();
+    queue.Enqueue(root);
+    while (queue.Count > 0 && visited.Count < size + 16)
+    {
+        var node = queue.Dequeue();
+        if (node == 0 || node == head || !visited.Add(node)) continue;
+        if (!reader.TryReadStruct<byte>(node + Poe2.StdMapNode.IsNil, out var nil) || nil != 0) continue;
+
+        queue.Enqueue(SafePtr(reader, node + Poe2.StdMapNode.Left));
+        queue.Enqueue(SafePtr(reader, node + Poe2.StdMapNode.Right));
+
+        reader.TryReadStruct<uint>(node + Poe2.StdMapNode.KeyId, out var id);
+        var address = SafePtr(reader, node + Poe2.StdMapNode.ValueEntityPtr);
+        if (address == 0 || id >= Poe2.EntityList.VisualIdThreshold) continue;
+        var metadata = ReadEntityMetadata(reader, address);
+        if (metadata.Length == 0 || (!includeAll && !LooksLikeMechanic(metadata))) continue;
+
+        var render = ResolveComponentAddr(reader, address, "Render");
+        System.Numerics.Vector2? grid = null;
+        if (render != 0 &&
+            reader.TryReadStruct<System.Numerics.Vector3>(render + Poe2.Render.CurrentWorldPosition, out var world))
+            grid = new System.Numerics.Vector2(world.X / Poe2.WorldToGridRatio, world.Y / Poe2.WorldToGridRatio);
+
+        var componentNames = new[]
+        {
+            "Life", "MinimapIcon", "Targetable", "Chest", "ObjectMagicProperties", "StateMachine"
+        };
+        var present = new List<string>(componentNames.Length);
+        nint icon = 0;
+        nint life = 0;
+        nint stateMachine = 0;
+        foreach (var componentName in componentNames)
+        {
+            var component = ResolveComponentAddr(reader, address, componentName);
+            if (component == 0) continue;
+            present.Add(componentName);
+            if (componentName == "MinimapIcon") icon = component;
+            if (componentName == "Life") life = component;
+            if (componentName == "StateMachine") stateMachine = component;
+        }
+
+        int? iconComplete = null;
+        if (icon != 0 && reader.TryReadStruct<int>(icon + Poe2.MinimapIcon.CompletedState, out var state))
+            iconComplete = state;
+
+        var lifeState = life == 0 ? "none" : "unreadable";
+        int? hpCur = null;
+        int? hpMax = null;
+        if (life != 0 &&
+            reader.TryReadStruct<VitalStruct>(life + Poe2.Life.Health, out var vital) &&
+            vital.LooksValid())
+        {
+            hpCur = vital.Current;
+            hpMax = vital.Max;
+            lifeState = vital.Current > 0 ? "alive" : "dead";
+        }
+
+        var stateValues = ReadPrimaryStateMachineValues(reader, stateMachine);
+        result[id] = new MechanicProbeEntity(
+            id,
+            address,
+            source,
+            metadata,
+            grid,
+            playerGrid.HasValue && grid.HasValue
+                ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+                : null,
+            string.Join(',', present),
+            iconComplete,
+            lifeState,
+            hpCur,
+            hpMax,
+            stateValues);
+    }
+}
+
+static string ReadPrimaryStateMachineValues(MemoryReader reader, nint component)
+{
+    const int ValuesOffset = 0x160;
+    if (component == 0 ||
+        !reader.TryReadStruct<StdVector>(component + ValuesOffset, out var values) ||
+        !TryGetVectorCount(values, sizeof(long), 1, 100, out var count))
+        return "";
+
+    var sample = new long[Math.Min(count, 16)];
+    for (var i = 0; i < sample.Length; i++)
+        if (!reader.TryReadStruct<long>(values.First + i * sizeof(long), out sample[i]))
+            return "";
+    return string.Join(',', sample);
+}
+
+static System.Numerics.Vector2? ReadEntityGrid(MemoryReader reader, nint entity)
+{
+    var render = ResolveComponentAddr(reader, entity, "Render");
+    if (render == 0 ||
+        !reader.TryReadStruct<System.Numerics.Vector3>(render + Poe2.Render.CurrentWorldPosition, out var world))
+        return null;
+    return new System.Numerics.Vector2(
+        world.X / Poe2.WorldToGridRatio,
+        world.Y / Poe2.WorldToGridRatio);
+}
+
+static bool LooksLikeMechanic(string value)
+{
+    if (value.Contains("/Monsters/", StringComparison.OrdinalIgnoreCase) &&
+        (value.Contains("Strongbox", StringComparison.OrdinalIgnoreCase) ||
+         value.Contains("/Shrines/", StringComparison.OrdinalIgnoreCase)))
+        return false;
+
+    ReadOnlySpan<string> terms =
+    [
+        "Ritual", "Breach", "Brequel", "Essence", "Expedition", "Abyss", "Delirium",
+        "RogueExile", "AtlasExile",
+        "Strongbox", "Shrine", "Ultimatum", "Legion", "Blight", "Sanctum",
+        "Incursion", "Betrayal", "Harvest", "Hellscape", "Delve", "Heist"
+    ];
+    foreach (var term in terms)
+        if (value.Contains(term, StringComparison.OrdinalIgnoreCase))
+            return true;
+    return false;
+}
+
+static void PrintMechanicTerrainCandidates(MemoryReader reader, nint areaInstance)
+{
+    const int TerrainOffset = 0x8A0;
+    var terrain = areaInstance + TerrainOffset;
+    reader.TryReadStruct<long>(terrain + 0x18, out var tilesX);
+    reader.TryReadStruct<nint>(terrain + 0x28, out var first);
+    reader.TryReadStruct<nint>(terrain + 0x30, out var last);
+    var count = first == 0 ? 0 : ((long)last - (long)first) / 0x38;
+    if (tilesX <= 0 || count is <= 0 or > 200000)
+    {
+        Console.WriteLine("Terrain clues : unavailable");
+        return;
+    }
+
+    var matches = new Dictionary<string, (int Count, double SumX, double SumY)>(StringComparer.Ordinal);
+    for (long i = 0; i < count; i++)
+    {
+        var tgt = SafePtr(reader, first + (nint)(i * 0x38) + 0x8);
+        if (tgt == 0) continue;
+        var path = ReadStdWString(reader, tgt + 0x8);
+        if (!LooksLikeMechanicTerrain(path)) continue;
+        var old = matches.GetValueOrDefault(path);
+        var x = (i % tilesX) * 23.0;
+        var y = (i / tilesX) * 23.0;
+        matches[path] = (old.Count + 1, old.SumX + x, old.SumY + y);
+    }
+
+    Console.WriteLine($"Terrain clues : {matches.Count} mechanic path(s)");
+    foreach (var (path, hit) in matches.OrderBy(x => x.Key))
+        Console.WriteLine($"  TILE count={hit.Count,3} center={hit.SumX / hit.Count,7:F1},{hit.SumY / hit.Count,7:F1}  {path}");
+}
+
+static bool LooksLikeMechanicTerrain(string path)
+{
+    // Words such as "Abyss" also appear in ordinary terrain construction assets
+    // (for example PillarTop_Abyss_Fill). League directory segments are the
+    // high-confidence signal that a tile belongs to an actual mechanic.
+    if (!path.Contains("/Leagues/", StringComparison.OrdinalIgnoreCase) &&
+        !path.Contains("/League", StringComparison.OrdinalIgnoreCase))
+        return false;
+    return LooksLikeMechanic(path);
+}
+
+static void PrintMechanicEvent(string eventName, MechanicProbeEntity entity)
+{
+    var complete = entity.IconComplete.HasValue ? $" iconState={entity.IconComplete}" : "";
+    var grid = entity.Grid.HasValue ? $" grid={entity.Grid.Value.X:F1},{entity.Grid.Value.Y:F1}" : "";
+    var distance = entity.Distance.HasValue ? $" dist={entity.Distance:F1}" : "";
+    var hp = entity.HpMax.HasValue ? $" hp={entity.HpCur}/{entity.HpMax}" : $" life={entity.LifeState}";
+    var state = entity.StateValues.Length > 0 ? $" sm=[{entity.StateValues}]" : "";
+    Console.WriteLine(
+        $"[{DateTime.Now:HH:mm:ss.fff}] {eventName,-8} {entity.Source,-8} id={entity.Id,-10} " +
+        $"addr=0x{entity.Address:X16}{grid}{distance}{complete}{hp}{state} " +
+        $"comps=[{entity.Components}] {entity.Metadata}");
+}
+
+// Recover selected component layouts without relying on ExileCore2's protected offset table.
+// The candidate shapes come from public ExileCore/GameHelper implementations, while every
+// reported offset is validated against the current PoE2 process.
+static int RunComponentLayoutScan(
+    ProcessHandle process,
+    MemoryReader reader,
+    bool includeAll,
+    int maxEntities)
+{
+    var (_, _, areaInstance, _) = ResolveChain(process, reader);
+    if (areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    maxEntities = Math.Clamp(maxEntities, 1, 5000);
+    Console.WriteLine();
+    Console.WriteLine("Component layout scan");
+    Console.WriteLine("---------------------");
+    Console.WriteLine($"Area instance : 0x{areaInstance:X16}");
+    Console.WriteLine($"Filter        : {(includeAll ? "all real entities" : "mechanic metadata keywords")}");
+    Console.WriteLine($"Entity cap    : {maxEntities}");
+    Console.WriteLine("Reference     : ExileCore StateMachine pointer/vector geometry; OMP 24+64-byte mod records");
+
+    var seen = new HashSet<uint>();
+    var scanned = 0;
+    var stateComponents = 0;
+    var stateCandidates = 0;
+    var magicComponents = 0;
+    var magicCandidates = 0;
+
+    foreach (var (source, mapOffset) in new[]
+             {
+                 ("sleeping", Poe2.AreaInstance.SleepingEntities),
+                 ("awake", Poe2.AreaInstance.AwakeEntities)
+             })
+    {
+        foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+        {
+            if (!seen.Add(id) || (!includeAll && !LooksLikeMechanic(metadata))) continue;
+            if (++scanned > maxEntities) break;
+
+            var stateMachine = ResolveComponentAddr(reader, entity, "StateMachine");
+            var magicProperties = ResolveComponentAddr(reader, entity, "ObjectMagicProperties");
+            if (stateMachine == 0 && magicProperties == 0) continue;
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"ENTITY {source,-8} id={id,-10} addr=0x{entity:X16} {metadata}");
+
+            if (stateMachine != 0)
+            {
+                stateComponents++;
+                Console.WriteLine($"  StateMachine          : 0x{stateMachine:X16}");
+                stateCandidates += PrintStateMachineCandidates(reader, stateMachine);
+            }
+
+            if (magicProperties != 0)
+            {
+                magicComponents++;
+                Console.WriteLine($"  ObjectMagicProperties : 0x{magicProperties:X16}");
+                magicCandidates += PrintMagicPropertyCandidates(reader, magicProperties);
+            }
+        }
+
+        if (scanned >= maxEntities) break;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine(
+        $"Scanned {Math.Min(scanned, maxEntities)} entities; " +
+        $"StateMachine {stateComponents} component(s), {stateCandidates} candidate(s); " +
+        $"ObjectMagicProperties {magicComponents} component(s), {magicCandidates} candidate(s).");
+    if (stateComponents > 0 && stateCandidates == 0)
+        Console.WriteLine("No StateMachine table decoded. Re-run with --mechanic-all in an active encounter.");
+    if (magicComponents > 0 && magicCandidates == 0)
+        Console.WriteLine("No 64-byte mod vector decoded. Test near an Essence rare or other modified monster.");
+    return 0;
+}
+
+static IEnumerable<(uint Id, nint Address, string Metadata)> EnumerateEntityMap(
+    MemoryReader reader,
+    nint areaInstance,
+    int mapOffset)
+{
+    var head = SafePtr(reader, areaInstance + mapOffset);
+    if (head == 0 ||
+        !reader.TryReadStruct<int>(areaInstance + mapOffset + 8, out var size) ||
+        size is <= 0 or > 200000)
+        yield break;
+
+    var queue = new Queue<nint>();
+    var visited = new HashSet<nint>();
+    queue.Enqueue(SafePtr(reader, head + Poe2.StdMapNode.Parent));
+    while (queue.Count > 0 && visited.Count < size + 16)
+    {
+        var node = queue.Dequeue();
+        if (node == 0 || node == head || !visited.Add(node)) continue;
+        if (!reader.TryReadStruct<byte>(node + Poe2.StdMapNode.IsNil, out var nil) || nil != 0) continue;
+
+        queue.Enqueue(SafePtr(reader, node + Poe2.StdMapNode.Left));
+        queue.Enqueue(SafePtr(reader, node + Poe2.StdMapNode.Right));
+
+        reader.TryReadStruct<uint>(node + Poe2.StdMapNode.KeyId, out var id);
+        var entity = SafePtr(reader, node + Poe2.StdMapNode.ValueEntityPtr);
+        if (entity == 0 || id >= Poe2.EntityList.VisualIdThreshold) continue;
+
+        var metadata = ReadEntityMetadata(reader, entity);
+        if (metadata.Length > 0)
+            yield return (id, entity, metadata);
+    }
+}
+
+static int PrintStateMachineCandidates(MemoryReader reader, nint component)
+{
+    // The primary machine remains at +0x158/+0x160. Complex entities can expose four
+    // additional machine-shaped layers at a stable +0x1B0 stride.
+    const int PrimaryOffset = 0x158;
+    const int LayerStride = 0x1B0;
+    const int LayerCount = 5;
+    var found = 0;
+    for (var layer = 0; layer < LayerCount; layer++)
+    {
+        var offset = PrimaryOffset + layer * LayerStride;
+        var statesPtr = SafePtr(reader, component + offset);
+        if (statesPtr == 0 ||
+            !reader.TryReadStruct<StdVector>(component + offset + 8, out var values) ||
+            !TryGetVectorCount(values, sizeof(long), 1, 100, out var count))
+            continue;
+
+        var names = new List<string>();
+        var namesBase = SafePtr(reader, statesPtr + 0x10);
+        for (var stride = 0x20; namesBase != 0 && stride <= 0x180; stride += 8)
+        {
+            var strideNames = new List<string>();
+            var sampleCount = Math.Min(count, 8);
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var name = ReadNativeUtf8Text(reader, namesBase + i * stride);
+                if (!LooksLikeStateName(name)) break;
+                strideNames.Add(name);
+            }
+
+            var required = sampleCount == 1 ? 1 : Math.Min(3, sampleCount);
+            if (strideNames.Count >= required && strideNames.Count > names.Count)
+                names = strideNames;
+        }
+
+        if (names.Count == 0)
+            names.AddRange(FindStateTextLeaves(reader, statesPtr, 8));
+        if (names.Count == 0 && CountLocalPointers(reader, statesPtr) < 4) continue;
+
+        var valuesSample = new List<long>();
+        for (var i = 0; i < Math.Min(count, 8); i++)
+        {
+            if (!reader.TryReadStruct<long>(values.First + i * sizeof(long), out var value)) break;
+            valuesSample.Add(value);
+        }
+
+        var valuesText = string.Join(", ", valuesSample);
+        var namesText = names.Count == 0 ? "none decoded" : string.Join(", ", names);
+        var layerName = layer == 0 ? "primary" : $"embedded[{layer}]";
+        Console.WriteLine(
+            $"    STATE {layerName,-11} offset=+0x{offset:X3} values=+0x{offset + 8:X3} " +
+            $"count={count} values=[{valuesText}] text=[{namesText}]");
+        found++;
+    }
+    return found;
+}
+
+static IReadOnlyList<string> FindStateTextLeaves(MemoryReader reader, nint root, int maxResults)
+{
+    var results = new HashSet<string>(StringComparer.Ordinal);
+    var visited = new HashSet<nint>();
+    var queue = new Queue<nint>();
+    var rootRegion = (ulong)root >> 32;
+    Span<byte> block = stackalloc byte[0x80];
+    queue.Enqueue(root);
+
+    while (queue.Count > 0 && visited.Count < 512 && results.Count < maxResults)
+    {
+        var address = queue.Dequeue();
+        if (!visited.Add(address)) continue;
+
+        var direct = reader.ReadStringUtf8(address, 96);
+        if (LooksLikeStateName(direct))
+            results.Add(direct);
+
+        var native = ReadNativeUtf8Text(reader, address);
+        if (LooksLikeStateName(native))
+            results.Add(native);
+
+        if (reader.TryReadBytes(address, block) != block.Length) continue;
+        for (var offset = 0; offset <= block.Length - sizeof(long); offset += sizeof(long))
+        {
+            var pointer = (nint)BitConverter.ToInt64(block[offset..(offset + sizeof(long))]);
+            if (!IsPlausiblePointer(pointer) || ((ulong)pointer >> 32) != rootRegion) continue;
+            if (!visited.Contains(pointer))
+                queue.Enqueue(pointer);
+        }
+    }
+
+    return results.OrderBy(x => x, StringComparer.Ordinal).Take(maxResults).ToArray();
+}
+
+static int CountLocalPointers(MemoryReader reader, nint root)
+{
+    Span<byte> block = stackalloc byte[0x80];
+    if (reader.TryReadBytes(root, block) != block.Length) return 0;
+    var rootRegion = (ulong)root >> 32;
+    var count = 0;
+    for (var offset = 0; offset <= block.Length - sizeof(long); offset += sizeof(long))
+    {
+        var pointer = (nint)BitConverter.ToInt64(block[offset..(offset + sizeof(long))]);
+        if (IsPlausiblePointer(pointer) && ((ulong)pointer >> 32) == rootRegion)
+            count++;
+    }
+    return count;
+}
+
+static int PrintMagicPropertyCandidates(MemoryReader reader, nint component)
+{
+    const int ScanSpan = 0x900;
+    const int HeaderSize = 24;
+    const int RecordSize = 64;
+    const int KeyOffset = 16;
+    var found = 0;
+
+    for (var offset = 0; offset <= ScanSpan - 0x18; offset += 8)
+    {
+        if (!reader.TryReadStruct<StdVector>(component + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, HeaderSize + RecordSize, HeaderSize + RecordSize * 128, out var bytes) ||
+            (bytes - HeaderSize) % RecordSize != 0)
+            continue;
+
+        var count = (bytes - HeaderSize) / RecordSize;
+        var names = new List<string>();
+        for (var i = 0; i < Math.Min(count, 8); i++)
+        {
+            var key = SafePtr(reader, vector.First + HeaderSize + i * RecordSize + KeyOffset);
+            if (key == 0) break;
+            var name = reader.ReadStringUtf16(key, 128);
+            if (!LooksLikeModName(name)) break;
+            names.Add(name);
+        }
+
+        if (names.Count == 0) continue;
+        Console.WriteLine(
+            $"    MODS candidate offset=+0x{offset:X3} count={count} " +
+            $"records=0x{RecordSize:X} [{string.Join(", ", names)}]");
+        found++;
+    }
+    return found;
+}
+
+static bool TryGetVectorCount(
+    StdVector vector,
+    int elementSize,
+    int minCount,
+    int maxCount,
+    out int count)
+{
+    count = 0;
+    if (!IsPlausiblePointer(vector.First) ||
+        !IsPlausiblePointer(vector.Last) ||
+        !IsPlausiblePointer(vector.End) ||
+        vector.Last < vector.First ||
+        vector.End < vector.Last)
+        return false;
+
+    var bytes = (long)vector.Last - (long)vector.First;
+    if (bytes % elementSize != 0) return false;
+    var elements = bytes / elementSize;
+    if (elements < minCount || elements > maxCount) return false;
+    count = (int)elements;
+    return true;
+}
+
+static bool TryGetVectorByteSize(StdVector vector, int minBytes, int maxBytes, out int bytes)
+{
+    bytes = 0;
+    if (!IsPlausiblePointer(vector.First) ||
+        !IsPlausiblePointer(vector.Last) ||
+        !IsPlausiblePointer(vector.End) ||
+        vector.Last < vector.First ||
+        vector.End < vector.Last)
+        return false;
+
+    var size = (long)vector.Last - (long)vector.First;
+    if (size < minBytes || size > maxBytes) return false;
+    bytes = (int)size;
+    return true;
+}
+
+static string ReadNativeUtf8Text(MemoryReader reader, nint address)
+{
+    var buffer = SafePtr(reader, address);
+    if (buffer == 0 ||
+        !reader.TryReadStruct<int>(address + 0x10, out var length) ||
+        length is <= 0 or > 128)
+        return "";
+    if (reader.TryReadStruct<int>(address + 0x18, out var withNull) &&
+        withNull != 0 && withNull != length + 1)
+        return "";
+    return reader.ReadStringUtf8(buffer, length + 1);
+}
+
+static bool LooksLikeStateName(string value)
+{
+    if (value.Length is < 3 or > 96 || !value.Any(char.IsLetter)) return false;
+    return value.All(ch => char.IsLetterOrDigit(ch) || ch is '_' or '-' or ' ');
+}
+
+static bool LooksLikeModName(string value)
+{
+    if (value.Length is <= 2 or > 128 || !value.Any(char.IsLetter)) return false;
+    return value.All(ch => !char.IsControl(ch) && ch != '\uFFFD');
+}
+
+static bool IsPlausiblePointer(nint pointer)
+{
+    var value = (ulong)pointer;
+    return value is >= 0x10000 and <= 0x7FFFFFFFFFFF;
+}
+
+static nint FindGameStateSlot(ProcessHandle process, MemoryReader reader)
+{
+    foreach (var pattern in AobPatterns.GameStateRefs)
+    foreach (var slot in AobScanner.ScanForResolvedAddresses(process, reader, pattern).Distinct())
+        if (new Poe2Live(reader, slot).TryResolve(out _, out _, out _))
+            return slot;
+    return 0;
+}
+
+// Watch area changes using the same one-time GameState slot resolution.
 static int RunWatch(ProcessHandle process, MemoryReader reader)
 {
-    nint slot = 0;
-    foreach (var pat in AobPatterns.GameStateRefs)
-        foreach (var s in AobScanner.ScanForResolvedAddresses(process, reader, pat).Distinct())
-        {
-            if (new Poe2Live(reader, s).TryResolve(out _, out _, out _)) { slot = s; break; }
-            if (slot != 0) break;
-        }
+    var slot = FindGameStateSlot(process, reader);
     if (slot == 0) { Console.Error.WriteLine("Could not lock GameState slot (in game?)."); return 1; }
     var live = new Poe2Live(reader, slot);
     Console.WriteLine($"WATCH started, GameState slot 0x{slot:X16}. Logging on area change. Ctrl+C to stop.");
@@ -1498,6 +2196,20 @@ static nint? TryGetHexArg(string[] args, string flag)
     if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s[2..];
     return long.TryParse(s, System.Globalization.NumberStyles.HexNumber, null, out var v) ? (nint)v : null;
 }
+
+readonly record struct MechanicProbeEntity(
+    uint Id,
+    nint Address,
+    string Source,
+    string Metadata,
+    System.Numerics.Vector2? Grid,
+    float? Distance,
+    string Components,
+    int? IconComplete,
+    string LifeState,
+    int? HpCur,
+    int? HpMax,
+    string StateValues);
 
 static class Win
 {

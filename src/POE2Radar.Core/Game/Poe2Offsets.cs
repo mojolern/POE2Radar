@@ -174,7 +174,17 @@ public static class Poe2
         public const int CompletedState = 0x10; // ✓ int — 0 = active/shown, non-zero = completed/faded
     }
 
-    /// <summary>ObjectMagicProperties component — monster/chest rarity.</summary>
+    /// <summary>
+    /// StateMachine component. The primary state-name pointer and parallel value vector were
+    /// validated live on Essence and Expedition encounter entities.
+    /// </summary>
+    public static class StateMachine
+    {
+        public const int StatesPtr = 0x158;
+        public const int StateValues = 0x160; // StdVector<long>
+    }
+
+    /// <summary>ObjectMagicProperties component - monster/chest rarity.</summary>
     public static class ObjectMagicProperties
     {
         // ✓ validated live across 21 monsters (values 0 and 2 seen). Enum: 0=Normal,1=Magic,2=Rare,3=Unique.

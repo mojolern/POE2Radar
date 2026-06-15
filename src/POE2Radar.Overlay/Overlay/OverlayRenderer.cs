@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using POE2Radar.Core.Game;
 using static POE2Radar.Core.Game.JunkFilter;
@@ -39,8 +40,10 @@ public sealed class OverlayRenderer : IDisposable
         [Poe2Live.LeagueMechanic.Expedition]  = (new Color4(0.90f, 0.75f, 0.30f, 1f), "Exped"),
         [Poe2Live.LeagueMechanic.Breach]      = (new Color4(0.70f, 0.20f, 0.90f, 1f), "Breach"),
         [Poe2Live.LeagueMechanic.Ritual]      = (new Color4(0.85f, 0.15f, 0.15f, 1f), "Ritual"),
+        [Poe2Live.LeagueMechanic.Essence]     = (new Color4(0.20f, 0.88f, 1.00f, 1f), "Essence"),
         [Poe2Live.LeagueMechanic.Delirium]    = (new Color4(0.75f, 0.75f, 0.75f, 1f), "Delir"),
         [Poe2Live.LeagueMechanic.Abyss]       = (new Color4(0.30f, 0.85f, 0.30f, 1f), "Abyss"),
+        [Poe2Live.LeagueMechanic.RogueExile]  = (new Color4(1.00f, 0.35f, 0.20f, 1f), "Exile"),
         [Poe2Live.LeagueMechanic.Incursion]   = (new Color4(1.00f, 0.50f, 0.20f, 1f), "Incur"),
         [Poe2Live.LeagueMechanic.Legion]      = (new Color4(0.60f, 0.40f, 0.20f, 1f), "Legion"),
         [Poe2Live.LeagueMechanic.Betrayal]    = (new Color4(0.40f, 0.70f, 0.40f, 1f), "Betray"),
@@ -52,6 +55,7 @@ public sealed class OverlayRenderer : IDisposable
         [Poe2Live.LeagueMechanic.Hellscape]   = (new Color4(0.90f, 0.30f, 0.10f, 1f), "Hell"),
     };
     private readonly Dictionary<Poe2Live.LeagueMechanic, ID2D1SolidColorBrush> _leagueBrushes = new();
+    private readonly int[] _leagueCounts = new int[Enum.GetValues<Poe2Live.LeagueMechanic>().Length];
     private string _lastLandmarkColor = "";
 
     private readonly OverlayWindow _window;
@@ -72,11 +76,23 @@ public sealed class OverlayRenderer : IDisposable
     private float _lastLmFs, _lastTrFs, _lastChFs, _lastStatusFs, _lastAtlasFs;
     private string _lastFont = "";
     private float _mapViewportCorrectionX;
-    private float _lastMapShiftX = float.NaN;
-    private float _lastMapShiftY = float.NaN;
+    private bool _mapViewportCorrectionActive;
     private bool _ready;
 
+    public double LastDrawMs { get; private set; }
+    public double LastEndDrawMs { get; private set; }
+    public double LastPresentMs { get; private set; }
+    public double LastFogMs { get; private set; }
+    public int LastFogSamples { get; private set; }
+    public int LastFogRects { get; private set; }
+
     public OverlayRenderer(OverlayWindow window) { _window = window; }
+
+    public void ResetMapTracking()
+    {
+        _mapViewportCorrectionX = 0f;
+        _mapViewportCorrectionActive = false;
+    }
 
     private void EnsureResources()
     {
@@ -119,6 +135,9 @@ public sealed class OverlayRenderer : IDisposable
     {
         if (!_window.IsValid) return;
         EnsureResources();
+        LastFogMs = 0;
+        LastFogSamples = 0;
+        LastFogRects = 0;
         var font = ctx.Radar?.FontFamily ?? "Consolas";
         if (font != _lastFont)
         {
@@ -132,6 +151,7 @@ public sealed class OverlayRenderer : IDisposable
             _tf = _window.DWriteFactory.CreateTextFormat(font, null, FontWeight.Normal, Vortice.DirectWrite.FontStyle.Normal, FontStretch.Normal, 12f, "en-us");
         }
         var rt = _window.RenderTarget;
+        var drawStarted = Stopwatch.GetTimestamp();
         rt.BeginDraw();
         rt.Clear(new Color4(0f, 0f, 0f, 0f));
         rt.TextAntialiasMode = Vortice.Direct2D1.TextAntialiasMode.Grayscale;
@@ -160,8 +180,16 @@ public sealed class OverlayRenderer : IDisposable
                     DrawPathTarget(rt, ctx);
             }
         }
-        finally { rt.EndDraw(); }
+        finally
+        {
+            LastDrawMs = Stopwatch.GetElapsedTime(drawStarted).TotalMilliseconds;
+            var endDrawStarted = Stopwatch.GetTimestamp();
+            rt.EndDraw();
+            LastEndDrawMs = Stopwatch.GetElapsedTime(endDrawStarted).TotalMilliseconds;
+        }
+        var presentStarted = Stopwatch.GetTimestamp();
         _window.Present();
+        LastPresentMs = Stopwatch.GetElapsedTime(presentStarted).TotalMilliseconds;
     }
 
     private void DrawStatus(ID2D1RenderTarget rt, RenderContext ctx)
@@ -170,14 +198,14 @@ public sealed class OverlayRenderer : IDisposable
 
         int alive = 0, normals = 0, magics = 0, rares = 0, uniques = 0, bosses = 0;
         int npcs = 0, chests = 0, transitions = 0;
-        var leagueCounts = new Dictionary<Poe2Live.LeagueMechanic, int>();
+        Array.Clear(_leagueCounts);
         foreach (var e in ctx.Entities)
         {
             if (e.Category == Poe2Live.EntityCategory.Monster && e.IsAlive)
             {
                 alive++;
                 if (e.IsBoss) bosses++;
-                if (e.IsLeagueMechanic) { leagueCounts.TryGetValue(e.League, out var lc); leagueCounts[e.League] = lc + 1; }
+                if (e.IsLeagueMechanic) _leagueCounts[(int)e.League]++;
                 switch (e.Rarity) { case Poe2Live.Rarity.Unique: uniques++; break; case Poe2Live.Rarity.Rare: rares++; break; case Poe2Live.Rarity.Magic: magics++; break; default: normals++; break; }
             }
             else if (e.Category == Poe2Live.EntityCategory.Npc) npcs++;
@@ -217,9 +245,10 @@ public sealed class OverlayRenderer : IDisposable
             DrawSeg($"Chest:{chests}  ", _bChest!);
             DrawSeg($"Exit:{transitions}", _bTrans!);
             if (bosses > 0) DrawSeg($"  BOSS:{bosses}", _bUnique!);
-            foreach (var (league, count) in leagueCounts)
+            foreach (var (league, style) in LeagueStyles)
             {
-                if (LeagueStyles.TryGetValue(league, out var style))
+                var count = _leagueCounts[(int)league];
+                if (count > 0)
                     DrawSeg($"  {style.Label}:{count}", GetLeagueBrush(rt, league));
             }
         }
@@ -770,7 +799,7 @@ public sealed class OverlayRenderer : IDisposable
         var player = ctx.PlayerGrid;
 
         // Terrain bitmap, projected via the same affine grid→screen transform.
-        if (ctx.Terrain is { } t)
+        if (ctx.Radar?.ShowTerrain != false && ctx.Terrain is { } t)
         {
             _terrain ??= new TerrainBitmap(rt);
             var ts = ctx.Radar?.Terrain;
@@ -789,7 +818,14 @@ public sealed class OverlayRenderer : IDisposable
                 var ey = (p01 - p00) / t.Height;
                 var prev = rt.Transform;
                 rt.Transform = new Matrix3x2(ex.X, ex.Y, ey.X, ey.Y, p00.X, p00.Y);
-                rt.DrawBitmap(bmp, 1f, BitmapInterpolationMode.Linear, new Rect(0, 0, t.Width, t.Height));
+                var interpolation = ctx.Radar?.FastTerrainSampling != false
+                    ? BitmapInterpolationMode.NearestNeighbor
+                    : BitmapInterpolationMode.Linear;
+                rt.DrawBitmap(
+                    bmp,
+                    Math.Clamp(ctx.Radar?.TerrainOpacity ?? 1f, 0f, 1f),
+                    interpolation,
+                    new Rect(0, 0, t.Width, t.Height));
                 rt.Transform = prev;
             }
         }
@@ -797,6 +833,7 @@ public sealed class OverlayRenderer : IDisposable
         // Exploration fog — dim unexplored walkable areas
         if (ctx is { Terrain: { } ft, Exploration: { } expl, Radar.ShowExplorationFog: true })
         {
+            var fogStarted = Stopwatch.GetTimestamp();
             var fogAlpha = ctx.Radar?.FogOpacity ?? 0.45f;
             if (_bFog == null)
                 _bFog = rt.CreateSolidColorBrush(new Color4(0f, 0f, 0f, fogAlpha));
@@ -810,14 +847,19 @@ public sealed class OverlayRenderer : IDisposable
             {
                 for (var gx = 0; gx < ft.Width; gx += step)
                 {
+                    LastFogSamples++;
                     if (ft.Walkable[gy * ft.Width + gx] == 0) continue;
                     if (expl.IsExplored(gx, gy)) continue;
                     var p = Project(new NumVec2(gx + halfStep, gy + halfStep), player, center, scale);
                     var sz = scale * step * fogScale;
                     if (sz < 0.5f) continue;
-                    rt.FillRectangle(new Vortice.RawRectF(p.X - sz, p.Y - sz, p.X + sz, p.Y + sz), _bFog);
+                    rt.FillRectangle(
+                        new Vortice.RawRectF(p.X - sz, p.Y - sz, p.X + sz, p.Y + sz),
+                        _bFog);
+                    LastFogRects++;
                 }
             }
+            LastFogMs = Stopwatch.GetElapsedTime(fogStarted).TotalMilliseconds;
         }
 
         var rs = ctx.Radar;
@@ -826,43 +868,91 @@ public sealed class OverlayRenderer : IDisposable
         ctx.EntityScreenPositions?.Clear();
         foreach (var e in ctx.Entities)
         {
-            if (hideJunk && JunkFilter.IsJunk(e.Metadata)) continue;
+            var watchMatch = ctx.Watched?.Match(e.Metadata);
+            var isWatched = watchMatch is { Enabled: true };
+            var styles = rs?.Styles;
+            var mechMatch = styles != null ? MatchMechanic(styles, e.Metadata) : null;
+            var isMechanicEntity = mechMatch != null || e.IsLeagueMechanic || e.IsMechanicAnchor;
+            var isMechanicMonster =
+                e.Category == Poe2Live.EntityCategory.Monster &&
+                !e.IsMechanicAnchor &&
+                (mechMatch != null || e.IsLeagueMechanic);
             if (hidden != null && hidden.IsHidden(e.Metadata)) continue;
+            if (isMechanicMonster && rs?.ShowMechanicMonsters != true) continue;
+            if (!isWatched && hideJunk && JunkFilter.IsJunk(e.Metadata)) continue;
             var drawRange = rs?.EntityDrawRange ?? 0f;
-            if (drawRange > 0 && e.Category != Poe2Live.EntityCategory.Transition)
+            if (!isWatched &&
+                drawRange > 0 &&
+                e.Category != Poe2Live.EntityCategory.Transition &&
+                !e.IsMechanicAnchor)
             {
                 var dx = e.Grid.X - player.X; var dy = e.Grid.Y - player.Y;
                 if (dx * dx + dy * dy > drawRange * drawRange) continue;
             }
-            if (!e.IsTargetable && rs?.HideUntargetable == true) continue;
-            if (e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowFriendlyEntities == false) continue;
-            if (e.IsImmobile && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowImmobileEntities == false) continue;
+            if (!isWatched && !e.IsTargetable && rs?.HideUntargetable == true && !e.IsMechanicAnchor) continue;
+            if (!isWatched && e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowFriendlyEntities == false) continue;
+            if (!isWatched && e.IsImmobile && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowImmobileEntities == false) continue;
             var minHp = rs?.MinEntityHpPct ?? 0f;
-            if (minHp > 0 && e.HasLife && e.IsAlive && e.HpFraction * 100f < minHp) continue;
-            var styles = rs?.Styles;
+            if (!isWatched && minHp > 0 && e.HasLife && e.IsAlive && e.HpFraction * 100f < minHp) continue;
             string shapeName; float r; ID2D1SolidColorBrush brush;
 
             // Mechanic overrides are visual styling only; they must still obey monster death/clutter filters.
-            var mechMatch = styles != null ? MatchMechanic(styles, e.Metadata) : null;
-            if (mechMatch != null)
+            var deadAlpha = 1f;
+
+            if (e.Category == Poe2Live.EntityCategory.Monster)
             {
-                if (rs?.ShowMechanicIcons == false)
-                    mechMatch = null;
-                else if (e.Category == Poe2Live.EntityCategory.Monster && !e.IsAlive && rs?.HideDeadMechanicMonsters != false)
+                // Unknown is not alive. Suppress it until the retryable Life read recovers instead
+                // of leaving a permanent mechanic marker backed by an unreadable 0/0 vital block.
+                if (!isWatched &&
+                    e.LifeState == Poe2Live.EntityLifeState.Unknown &&
+                    !e.IsMechanicAnchor)
                     continue;
-                else if (e.Category != Poe2Live.EntityCategory.Monster && rs?.ShowMechanicNonMonsterIcons != true)
-                    mechMatch = null;
+                if (e.IsDead)
+                {
+                    if (!isWatched &&
+                        isMechanicEntity &&
+                        !e.IsMechanicAnchor &&
+                        rs?.HideDeadMechanicMonsters != false)
+                    {
+                        var fadeSeconds = Math.Max(0f, rs?.MechanicDeadFadeSeconds ?? 0f);
+                        if (fadeSeconds <= 0f || e.DeadForSeconds >= fadeSeconds) continue;
+                        deadAlpha = Math.Clamp(1f - e.DeadForSeconds / fadeSeconds, 0f, 1f);
+                    }
+                    else if (!isWatched && rs?.ShowDeadMonsters != true)
+                    {
+                        continue;
+                    }
+                }
             }
 
-            if (mechMatch != null)
+            if (!isWatched && isMechanicEntity && e.IconComplete) continue;
+            if (!isWatched && e.IsMechanicAnchor && rs?.ShowPreloadedMechanicLocations == false) continue;
+            if (!isWatched && isMechanicEntity && rs?.ShowMechanicIcons == false) continue;
+            if (!isWatched && mechMatch != null)
             {
-                SetStyleBrush(mechMatch.Color, mechMatch.Opacity);
+                if (e.Category != Poe2Live.EntityCategory.Monster &&
+                    !e.IsMechanicAnchor &&
+                    rs?.ShowMechanicNonMonsterIcons != true)
+                    continue;
+            }
+
+            if (isWatched)
+            {
+                SetStyleBrush(watchMatch!.Color, 1f);
+                (shapeName, r, brush) = ("Diamond", watchMatch.Size, _bStyle!);
+            }
+            else if (mechMatch != null)
+            {
+                SetStyleBrush(mechMatch.Color, mechMatch.Opacity * deadAlpha);
                 (shapeName, r, brush) = (mechMatch.Shape, mechMatch.Size, _bStyle!);
+            }
+            else if (e.IsMechanicAnchor && e.IsLeagueMechanic)
+            {
+                (shapeName, r, brush) = ("Star", 7f, GetLeagueBrush(rt, e.League));
             }
             else switch (e.Category)
             {
                 case Poe2Live.EntityCategory.Monster:
-                    if (!e.IsAlive && rs?.ShowDeadMonsters != true) continue;
                     if (e.IsBoss && rs?.ShowBossHighlight != false && e.IsAlive)
                     {
                         var bs = styles?.MonsterUnique;
@@ -941,15 +1031,30 @@ public sealed class OverlayRenderer : IDisposable
             DrawStyledIcon(rt, shapeName, p, r, brush, filled: true);
             ctx.EntityScreenPositions?.Add((p.X, p.Y, e.Metadata));
 
-            var watchMatch = ctx.Watched?.Match(e.Metadata);
-            if (watchMatch is { Enabled: true })
+            if (isWatched)
             {
-                var wr = watchMatch.Size;
-                rt.FillEllipse(new Ellipse(p, wr + 2, wr + 2), _bText!);
-                DrawStyledIcon(rt, shapeName, p, wr, brush, filled: true);
-                var wFs = rs?.WatchedFontSize ?? 14f;
-                var wTf = GetTextFormat(wFs, ref _tfLandmark, ref _lastLmFs);
-                rt.DrawText(watchMatch.Label, wTf, new Rect(p.X + wr + 4, p.Y - wFs / 2, p.X + 300, p.Y + wFs), _bText!);
+                rt.DrawEllipse(new Ellipse(p, r + 2, r + 2), _bText!, 1.5f);
+                if (rs?.ShowWatchedLabels != false &&
+                    (!isMechanicEntity || rs?.ShowMechanicLabels == true))
+                {
+                    var wFs = rs?.WatchedFontSize ?? 14f;
+                    var wTf = GetTextFormat(wFs, ref _tfLandmark, ref _lastLmFs);
+                    rt.DrawText(watchMatch!.Label, wTf, new Rect(p.X + r + 4, p.Y - wFs / 2, p.X + 300, p.Y + wFs), _bText!);
+                }
+            }
+            else if (e.IsMechanicAnchor && rs?.ShowMechanicLabels != false)
+            {
+                var mechanicLabel = mechMatch?.Name ?? GetMechanicLabel(e.League);
+                if (!string.IsNullOrEmpty(mechanicLabel))
+                {
+                    var mechanicFs = rs?.LandmarkFontSize ?? 14f;
+                    var mechanicTf = GetTextFormat(mechanicFs, ref _tfLandmark, ref _lastLmFs);
+                    rt.DrawText(
+                        mechanicLabel,
+                        mechanicTf,
+                        new Rect(p.X + r + 5, p.Y - mechanicFs / 2, p.X + 300, p.Y + mechanicFs),
+                        brush);
+                }
             }
             else if (e.Category == Poe2Live.EntityCategory.Transition && rs?.ShowTransitions != false)
             {
@@ -1093,6 +1198,13 @@ public sealed class OverlayRenderer : IDisposable
         return b;
     }
 
+    private static string GetMechanicLabel(Poe2Live.LeagueMechanic league) => league switch
+    {
+        Poe2Live.LeagueMechanic.RogueExile => "Rogue Exile",
+        Poe2Live.LeagueMechanic.None => "",
+        _ => league.ToString(),
+    };
+
     private void DrawInspector(ID2D1RenderTarget rt, RenderContext ctx)
     {
         if (ctx.InspectedMeta == null) return;
@@ -1233,7 +1345,10 @@ public sealed class OverlayRenderer : IDisposable
                 var ey = (p01 - p00) / t.Height;
                 var prev = rt.Transform;
                 rt.Transform = new Matrix3x2(ex.X, ex.Y, ey.X, ey.Y, p00.X, p00.Y);
-                rt.DrawBitmap(bmp, rs.MinimapOpacity, BitmapInterpolationMode.Linear, new Rect(0, 0, t.Width, t.Height));
+                var interpolation = rs.FastTerrainSampling
+                    ? BitmapInterpolationMode.NearestNeighbor
+                    : BitmapInterpolationMode.Linear;
+                rt.DrawBitmap(bmp, rs.MinimapOpacity, interpolation, new Rect(0, 0, t.Width, t.Height));
                 rt.Transform = prev;
             }
         }
@@ -1244,13 +1359,54 @@ public sealed class OverlayRenderer : IDisposable
         var mmDotScale = rs.MinimapDotScale;
         foreach (var e in ctx.Entities)
         {
-            if (hideJunkMm && JunkFilter.IsJunk(e.Metadata)) continue;
+            var watched = ctx.Watched?.Match(e.Metadata);
+            var isWatched = watched is { Enabled: true };
+            var minimapMechanicStyle = rs.Styles != null ? MatchMechanic(rs.Styles, e.Metadata) : null;
+            var minimapMechanic = e.IsLeagueMechanic ||
+                e.IsMechanicAnchor ||
+                minimapMechanicStyle != null;
+            var minimapMechanicMonster =
+                e.Category == Poe2Live.EntityCategory.Monster &&
+                !e.IsMechanicAnchor &&
+                (e.IsLeagueMechanic || minimapMechanicStyle != null);
             if (hiddenMm != null && hiddenMm.IsHidden(e.Metadata)) continue;
-            if (!e.IsAlive && e.HpMax > 0 && rs.ShowDeadMonsters != true) continue;
-            if (!e.IsTargetable && rs.HideUntargetable) continue;
-            if (e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && !rs.ShowFriendlyEntities) continue;
+            if (minimapMechanicMonster && !rs.ShowMechanicMonsters) continue;
+            if (!isWatched && hideJunkMm && JunkFilter.IsJunk(e.Metadata)) continue;
+            if (!isWatched &&
+                e.Category == Poe2Live.EntityCategory.Monster &&
+                (e.LifeState == Poe2Live.EntityLifeState.Unknown ||
+                 (e.IsDead && rs.ShowDeadMonsters != true)) &&
+                !e.IsMechanicAnchor)
+                continue;
+            if (!isWatched && minimapMechanic && e.IconComplete) continue;
+            if (!isWatched && e.IsMechanicAnchor && !rs.ShowPreloadedMechanicLocations) continue;
+            if (!isWatched && minimapMechanic && !rs.ShowMechanicIcons) continue;
+            if (!isWatched && minimapMechanic &&
+                e.Category != Poe2Live.EntityCategory.Monster &&
+                !e.IsMechanicAnchor &&
+                !rs.ShowMechanicNonMonsterIcons)
+                continue;
+            if (!isWatched && !e.IsTargetable && rs.HideUntargetable && !e.IsMechanicAnchor) continue;
+            if (!isWatched && e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && !rs.ShowFriendlyEntities) continue;
             ID2D1SolidColorBrush? b; float r;
-            switch (e.Category)
+            if (isWatched)
+            {
+                SetStyleBrush(watched!.Color, 1f);
+                (b, r) = (_bStyle, watched.Size * mmDotScale);
+            }
+            else if (e.IsMechanicAnchor)
+            {
+                if (minimapMechanicStyle != null)
+                {
+                    SetStyleBrush(minimapMechanicStyle.Color, minimapMechanicStyle.Opacity);
+                    (b, r) = (_bStyle, minimapMechanicStyle.Size * mmDotScale);
+                }
+                else
+                {
+                    (b, r) = (GetLeagueBrush(rt, e.League), 5f * mmDotScale);
+                }
+            }
+            else switch (e.Category)
             {
                 case Poe2Live.EntityCategory.Monster:
                     if (!rs.MinimapShowMonsters) continue;
@@ -1286,7 +1442,14 @@ public sealed class OverlayRenderer : IDisposable
 
             // Minimap labels
             var mmLabelFs = rs.MinimapLabelFontSize;
-            if (e.IsBoss && e.IsAlive && rs.MinimapLabelBoss)
+            if (isWatched &&
+                rs.MinimapLabelWatched &&
+                (!minimapMechanic || rs.ShowMechanicLabels))
+            {
+                var mmLabelTf = GetTextFormat(mmLabelFs, ref _tfTransition, ref _lastTrFs);
+                rt.DrawText(watched!.Label, mmLabelTf, new Rect(p.X + r + 2, p.Y - mmLabelFs / 2, p.X + 150, p.Y + mmLabelFs), b);
+            }
+            else if (e.IsBoss && e.IsAlive && rs.MinimapLabelBoss)
             {
                 var mmLabelTf = GetTextFormat(mmLabelFs, ref _tfTransition, ref _lastTrFs);
                 var bossLabel = ctx.EntityNames?.ResolveOrShorten(e.Metadata) ?? e.Metadata.Split('/')[^1];
@@ -1311,21 +1474,6 @@ public sealed class OverlayRenderer : IDisposable
                 var mmLabelTf = GetTextFormat(mmLabelFs, ref _tfTransition, ref _lastTrFs);
                 var npcLabel = ctx.EntityNames?.ResolveOrShorten(e.Metadata) ?? e.Metadata.Split('/')[^1];
                 rt.DrawText(npcLabel, mmLabelTf, new Rect(p.X + r + 2, p.Y - mmLabelFs / 2, p.X + 120, p.Y + mmLabelFs), _bNpc!);
-            }
-        }
-
-        // Watched entity labels on minimap
-        if (rs.MinimapLabelWatched && ctx.Watched != null)
-        {
-            var mmLabelFs = rs.MinimapLabelFontSize;
-            var mmLabelTf = GetTextFormat(mmLabelFs, ref _tfTransition, ref _lastTrFs);
-            foreach (var e in ctx.Entities)
-            {
-                if (!ctx.Watched.IsWatched(e.Metadata)) continue;
-                var w = ctx.Watched.Match(e.Metadata);
-                if (w == null || !w.Enabled) continue;
-                var p = Project(new NumVec2(e.Grid.X, e.Grid.Y), player, center, mmScale);
-                rt.DrawText(w.Label, mmLabelTf, new Rect(p.X + 4, p.Y - mmLabelFs / 2, p.X + 120, p.Y + mmLabelFs), _bText!);
             }
         }
 
@@ -1413,24 +1561,40 @@ public sealed class OverlayRenderer : IDisposable
         if (ctx.Radar?.MapCenterOnPlayerScreen == false || !TryPlayerScreenPoint(ctx, out var playerScreen))
         {
             _mapViewportCorrectionX = 0f;
-            _lastMapShiftX = float.NaN;
-            _lastMapShiftY = float.NaN;
+            _mapViewportCorrectionActive = false;
             return 0f;
         }
 
         var raw = playerScreen.X - ctx.WindowWidth * 0.5f;
-        var target = MathF.Abs(raw) < 60f ? 0f : MathF.Round(raw / 10f) * 10f;
-        target = Math.Clamp(target, -ctx.WindowWidth * 0.45f, ctx.WindowWidth * 0.20f);
+        var enterThreshold = MathF.Max(220f, ctx.WindowWidth * 0.16f);
+        var exitThreshold = enterThreshold * 0.55f;
 
-        var uiShifted = float.IsNaN(_lastMapShiftX) ||
-            MathF.Abs(ctx.Map.ShiftX - _lastMapShiftX) > 2f ||
-            MathF.Abs(ctx.Map.ShiftY - _lastMapShiftY) > 2f;
-
-        _lastMapShiftX = ctx.Map.ShiftX;
-        _lastMapShiftY = ctx.Map.ShiftY;
-
-        if (uiShifted || MathF.Abs(target - _mapViewportCorrectionX) >= 12f || target == 0f)
-            _mapViewportCorrectionX = target;
+        if (!_mapViewportCorrectionActive)
+        {
+            // Side panels cause a large, abrupt viewport displacement. Character/camera motion
+            // is much smaller, so latch only the former and do not chase the player every frame.
+            if (MathF.Abs(raw) >= enterThreshold)
+            {
+                _mapViewportCorrectionX = Math.Clamp(
+                    MathF.Round(raw / 10f) * 10f,
+                    -ctx.WindowWidth * 0.45f,
+                    ctx.WindowWidth * 0.20f);
+                _mapViewportCorrectionActive = true;
+            }
+        }
+        else if (MathF.Abs(raw) <= exitThreshold)
+        {
+            _mapViewportCorrectionX = 0f;
+            _mapViewportCorrectionActive = false;
+        }
+        else if (MathF.Sign(raw) != MathF.Sign(_mapViewportCorrectionX))
+        {
+            // A panel moved to the opposite side; capture the new viewport once.
+            _mapViewportCorrectionX = Math.Clamp(
+                MathF.Round(raw / 10f) * 10f,
+                -ctx.WindowWidth * 0.45f,
+                ctx.WindowWidth * 0.20f);
+        }
 
         return _mapViewportCorrectionX;
     }

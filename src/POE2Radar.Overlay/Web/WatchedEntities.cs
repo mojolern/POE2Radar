@@ -19,17 +19,18 @@ public sealed class WatchedEntities
     public IReadOnlyDictionary<string, WatchedEntry> All => _entries;
 
     public bool IsWatched(string metadata)
-    {
-        foreach (var (pattern, _) in _entries)
-            if (metadata.Contains(pattern, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
-    }
+        => Match(metadata) is { Enabled: true };
 
     public WatchedEntry? Match(string metadata)
     {
-        foreach (var (pattern, entry) in _entries)
-            if (metadata.Contains(pattern, StringComparison.OrdinalIgnoreCase)) return entry;
-        return null;
+        WatchedEntry? best = null;
+        foreach (var entry in _entries.Values)
+        {
+            if (!metadata.Contains(entry.Pattern, StringComparison.OrdinalIgnoreCase)) continue;
+            if (best == null || entry.Pattern.Length > best.Pattern.Length)
+                best = entry;
+        }
+        return best;
     }
 
     public void Add(string pattern, string label, string color, float size = 7f)

@@ -141,8 +141,11 @@ public sealed class ApiServer : IDisposable
                     name = _entityNames.ResolveOrShorten(e.Metadata),
                     poi = e.Poi, friendly = e.IsFriendly, rarity = e.Rarity.ToString(),
                     x = e.Grid.X, y = e.Grid.Y, hpCur = e.HpCur, hpMax = e.HpMax,
-                    alive = e.IsAlive, dist = (int)Dist(e.Grid, s.Player),
+                    alive = e.IsAlive, lifeState = e.LifeState.ToString(), deadForSeconds = e.DeadForSeconds,
+                    dist = (int)Dist(e.Grid, s.Player),
                     boss = e.IsBoss, league = e.League.ToString(), locked = e.IsLocked, large = e.IsLarge,
+                    source = e.IsSleeping ? "Sleeping" : "Awake",
+                    sleeping = e.IsSleeping, mechanicAnchor = e.IsMechanicAnchor, iconComplete = e.IconComplete,
                     watched = _watched.IsWatched(e.Metadata),
                 });
                 WriteJson(ctx, list);

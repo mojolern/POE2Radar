@@ -82,7 +82,8 @@ Everything auto-loads on startup and auto-saves on change.
 | F10 | Toggle overlay visibility |
 | F11 | Open web dashboard in browser |
 | PageUp/Down | Adjust map scale |
-| Arrow Keys | Adjust map offset |
+| Arrow Keys | Pan the open in-game map; overlay follows its live UI shift |
+| Ctrl+Arrow Keys | Manually adjust overlay calibration offset |
 | Home | Reset calibration |
 | Ctrl+C | Exit (restores all patched bytes) |
 

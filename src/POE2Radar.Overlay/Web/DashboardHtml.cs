@@ -49,6 +49,9 @@ tr.watched{background:#2a3a2a}
 .cat-Npc{background:#4a4a10;color:#fd5}.cat-Chest{background:#4a3010;color:#f90}
 .cat-Transition{background:#1a4a2a;color:#6f9}.cat-Other{background:#333;color:#aaa}
 .rarity-Magic{color:#79a8ff}.rarity-Rare{color:#ffd926}.rarity-Unique{color:#ff7300}
+.source-state{display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:bold;white-space:nowrap}
+.source-awake{background:#173d2a;color:#7fffb2}
+.source-sleeping{background:#3b3152;color:#d6b8ff}
 .auto-refresh{font-size:12px;color:#666;margin-left:auto}
 .db-path{font-family:monospace;font-size:11px;color:#bbb}
 .db-cat{color:#78b4ff;font-size:11px}
@@ -58,6 +61,9 @@ tr.watched{background:#2a3a2a}
 .setting-row .val{font-size:12px;color:#78b4ff;width:50px;text-align:right}
 .section{background:#252530;border-radius:6px;padding:10px 14px;margin-bottom:10px}
 .section h3{font-size:13px;color:#78b4ff;margin-bottom:8px}
+.settings-subtabs{position:sticky;top:0;z-index:3;display:flex;gap:4px;flex-wrap:wrap;background:#2a2a3a;padding:2px 0 10px;margin-bottom:2px}
+.settings-subtab{padding:5px 12px;background:#20202b;border:1px solid #3b3b49;color:#aaa;cursor:pointer;border-radius:4px;font-size:12px}
+.settings-subtab.active{background:#35435e;border-color:#6082bd;color:#fff}
 .saved{color:#5f5;font-size:12px;opacity:0;transition:opacity 0.3s}
 .saved.show{opacity:1}
 .panel.panel-with-rail.active{display:grid;grid-template-columns:minmax(0,1fr) 116px;gap:12px;align-items:start}
@@ -110,11 +116,12 @@ tr.watched{background:#2a3a2a}
   <div class="search">
     <input type="text" id="search" placeholder="Search metadata..." oninput="filterEntities()">
     <label><input type="checkbox" id="aliveOnly" onchange="refresh()"> Alive only</label>
+    <label><input type="checkbox" id="sleepingOnly" onchange="toggleSleepingOnly()"> Sleeping only</label>
     <span class="auto-refresh">Auto-refresh 2s</span>
   </div>
   <div class="filter-btns" id="catFilters"></div>
   <div class="scrollbox"><table><thead>
-    <tr><th>Cat</th><th>Rarity</th><th>Metadata</th><th>HP</th><th>Dist</th><th></th></tr>
+    <tr><th>State</th><th>Cat</th><th>Rarity</th><th>Metadata</th><th>HP</th><th>Dist</th><th></th></tr>
   </thead><tbody id="entityBody"></tbody></table></div>
 </div>
 
@@ -157,6 +164,7 @@ tr.watched{background:#2a3a2a}
     <div class="panel-title">
       <h2 style="margin:0">Radar Settings</h2>
     </div>
+    <div class="settings-subtabs" id="settingsSubtabs"></div>
     <div id="settingsBody"></div>
   </div>
   <div class="action-rail">
@@ -347,6 +355,7 @@ tr.watched{background:#2a3a2a}
     <label style="font-size:12px"><input type="checkbox" id="inspAutoRefresh" checked> Auto-refresh</label>
     <span style="font-size:12px;color:#888" id="inspStatus"></span>
   </div>
+  <div id="inspEntitySummary" style="display:none;background:#20202b;border:1px solid #3b3b49;padding:8px 10px;margin-bottom:10px;font-size:12px"></div>
   <div id="inspComponents" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px"></div>
   <div class="scrollbox" id="inspResults" style="font-size:12px"></div>
 </div>
@@ -391,11 +400,16 @@ async function refresh(){
 }
 function renderEntities(){
   const search=$('search').value.toLowerCase();
+  const sleepingOnly=$('sleepingOnly').checked;
   const cats=[...new Set(entities.map(e=>e.category))];
   $('catFilters').innerHTML=['All',...cats].map(c=>
     `<button class="filter-btn ${catFilter===(c==='All'?'':c)?'active':''}" onclick="setCat('${c==='All'?'':c}')">${c}</button>`).join('');
-  const f=entities.filter(e=>(!catFilter||e.category===catFilter)&&(!search||e.metadata.toLowerCase().includes(search)));
+  const f=entities.filter(e=>
+    (!catFilter||e.category===catFilter)&&
+    (!sleepingOnly||e.sleeping)&&
+    (!search||(e.name||'').toLowerCase().includes(search)||e.metadata.toLowerCase().includes(search)));
   $('entityBody').innerHTML=f.map(e=>`<tr class="${e.watched?'watched':''}">
+    <td><span class="source-state ${e.sleeping?'source-sleeping':'source-awake'}">${e.sleeping?'SLEEPING':'AWAKE'}</span></td>
     <td><span class="cat cat-${e.category}">${e.category}</span>${e.boss?'<span style="color:#f44;font-weight:bold" title="Boss"> ★</span>':''}${e.league&&e.league!=='None'?`<span style="color:#0af;font-size:10px" title="League Mechanic"> ${e.league}</span>`:''}</td>
     <td><span class="rarity-${e.rarity}">${e.rarity}</span></td>
     <td class="meta-short" title="${e.metadata}">${e.name||e.metadata}${e.locked?'<span style="color:#fa0" title="Locked"> 🔒</span>':''}${e.large?'<span style="color:#0af" title="Large"> L</span>':''}</td>
@@ -411,6 +425,14 @@ function renderEntities(){
 }
 function setCat(c){catFilter=c;renderEntities();}
 function filterEntities(){renderEntities();}
+function toggleSleepingOnly(){
+  if($('sleepingOnly').checked && $('aliveOnly').checked){
+    $('aliveOnly').checked=false;
+    refresh();
+    return;
+  }
+  renderEntities();
+}
 
 async function navigateTo(meta){
   const short=meta.split('/').pop().replace(/@\d+$/,'');
@@ -519,13 +541,17 @@ const settingsDef = [
     {key:'showPoiLabels',label:'POI Labels (non-NPC)',type:'bool'},
     {key:'showMonsterLabels',label:'Monster Names (Rare/Unique)',type:'bool'},
     {key:'showChestLabels',label:'Chest Type Labels',type:'bool'},
+    {key:'showMechanicLabels',label:'Encounter / Mechanic Labels',type:'bool'},
   ]},
   {section:'Visual Clutter Reduction',items:[
     {key:'hideJunkEntities',label:'Hide Junk (attachments, effects, cosmetics)',type:'bool'},
     {key:'hideUntargetable',label:'Hide Untargetable Entities',type:'bool'},
     {key:'showDeadMonsters',label:'Show Dead Corpses (off = cleaner map)',type:'bool'},
     {key:'showMechanicIcons',label:'Show Content/Mechanic Icons',type:'bool'},
+    {key:'showMechanicMonsters',label:'Show Encounter Monsters',type:'bool'},
+    {key:'showPreloadedMechanicLocations',label:'Show Preloaded Mechanic Locations',type:'bool'},
     {key:'hideDeadMechanicMonsters',label:'Hide Dead Content Monsters',type:'bool'},
+    {key:'mechanicDeadFadeSeconds',label:'Dead Content Fade (seconds, 0 = immediate)',type:'num',min:0,max:10,step:0.1},
     {key:'showMechanicNonMonsterIcons',label:'Show Content Non-Monster/Effect Icons',type:'bool'},
     {key:'showNormalMonsters',label:'Show Normal (white) Monsters',type:'bool'},
     {key:'showNormalChests',label:'Show Normal Chests (not just Rare/Unique)',type:'bool'},
@@ -580,7 +606,9 @@ const settingsDef = [
     {key:'terrainInteriorAlpha',label:'Interior Opacity',type:'num',min:0,max:0.5,step:0.02},
   ]},
   {section:'Performance',items:[
-    {key:'fpsCap',label:'FPS Cap (15-360, lower = less CPU)',type:'num',min:15,max:360,step:5},
+    {key:'fpsCap',label:'FPS Cap (15-60, software compositor)',type:'num',min:15,max:60,step:5},
+    {key:'showPerformanceDiagnostics',label:'Log performance diagnostics',type:'bool'},
+    {key:'fastTerrainSampling',label:'Fast terrain sampling',type:'bool'},
   ]},
   {section:'Calibration',items:[
     {key:'resetCalibrationOnZoneChange',label:'Auto-reset on zone change',type:'bool'},
@@ -720,6 +748,38 @@ async function loadSettings(){
   }
   html+=renderMechanicStyles();
   $('settingsBody').innerHTML=html;
+  renderSettingsSubtabs();
+  showSettingsGroup(activeSettingsGroup);
+}
+let activeSettingsGroup='entities';
+const settingsGroups=[
+  {id:'entities',label:'Entities'},
+  {id:'appearance',label:'Appearance'},
+  {id:'map',label:'Map'},
+  {id:'automation',label:'Automation'},
+  {id:'performance',label:'Performance'},
+];
+function settingsGroupFor(section){
+  if(section.includes('Dot Sizes')||section.includes('Outline')||section.includes('Font Sizes')||section.includes('Colors'))return 'appearance';
+  if(section.includes('Terrain / Map Outline')||section.includes('Calibration')||section.includes('Exploration Fog')||section.includes('Map Drawing'))return 'map';
+  if(section.includes('Pathfinding')||section.includes('Auto-Flask')||section.includes('Auto-Logout'))return 'automation';
+  if(section.includes('Performance'))return 'performance';
+  return 'entities';
+}
+function renderSettingsSubtabs(){
+  $('settingsSubtabs').innerHTML=settingsGroups.map(g=>
+    `<button class="settings-subtab" data-settings-group="${g.id}" onclick="showSettingsGroup('${g.id}')">${g.label}</button>`
+  ).join('');
+}
+function showSettingsGroup(group){
+  activeSettingsGroup=group;
+  document.querySelectorAll('#settingsBody > .section').forEach(section=>{
+    const title=section.querySelector('h3')?.textContent?.trim()||'';
+    section.style.display=settingsGroupFor(title)===group?'':'none';
+  });
+  document.querySelectorAll('.settings-subtab').forEach(button=>
+    button.classList.toggle('active',button.dataset.settingsGroup===group)
+  );
 }
 function setSetting(key,val){settings[key]=val;}
 const iconShapeOptions=['Circle','Square','Diamond','Triangle','TriangleDown','Star','Plus','Cross','Hexagon','Pentagon','Exclamation','Ring','Shield','Gem','Droplet','Heart','ArrowUp'];
@@ -1287,7 +1347,7 @@ async function loadInspectorEntities(){
     inspEntities=data;
     const sel=$('inspEntity');
     sel.innerHTML='<option value="">-- Select entity --</option>'+
-      data.map(e=>`<option value="${e.addr}">[${e.category}] ${e.name||e.metadata.split('/').pop()} (${e.addr})${e.boss?' ★':''}${e.locked?' 🔒':''}</option>`).join('');
+      data.map(e=>`<option value="${e.addr}">[${e.sleeping?'SLEEP':'AWAKE'}] [${e.category}] ${e.name||e.metadata.split('/').pop()} (${e.addr})${e.boss?' ★':''}${e.locked?' 🔒':''}</option>`).join('');
     $('inspStatus').textContent=`${data.length} entities`;
   }catch(ex){$('inspStatus').textContent='Error: '+ex.message}
 }
@@ -1306,8 +1366,23 @@ async function loadInspectorSchema(){
 }
 async function inspectEntity(){
   const addr=$('inspEntity').value;
-  if(!addr){$('inspResults').innerHTML='';$('inspComponents').innerHTML='';return}
+  if(!addr){
+    $('inspResults').innerHTML='';
+    $('inspComponents').innerHTML='';
+    $('inspEntitySummary').style.display='none';
+    return;
+  }
   inspSelectedAddr=addr;
+  const entity=inspEntities.find(e=>e.addr===addr);
+  if(entity){
+    const summary=$('inspEntitySummary');
+    summary.style.display='block';
+    summary.innerHTML=`
+      <span class="source-state ${entity.sleeping?'source-sleeping':'source-awake'}">${entity.sleeping?'SLEEPING':'AWAKE'}</span>
+      <b style="margin-left:8px;color:#fff">${entity.name||entity.metadata.split('/').pop()}</b>
+      <span style="color:#888;margin-left:8px">Dist ${entity.dist} · ${entity.lifeState||'No Life'}${entity.mechanicAnchor?' · Mechanic anchor':''}${entity.league&&entity.league!=='None'?' · '+entity.league:''}</span>
+      <div style="font-family:monospace;color:#999;margin-top:5px;overflow-wrap:anywhere">${entity.metadata}</div>`;
+  }
   try{
     const data=await(await fetch(`/api/inspect?entity=${addr}`)).json();
     if(data.error){$('inspResults').innerHTML=`<p style="color:#f66">${data.error}</p>`;return}

@@ -24,19 +24,40 @@ public sealed class Poe2Live
     private readonly Dictionary<nint, nint> _monsterAddr = new();  // entity → Monster component (0 = none)
     private readonly Dictionary<nint, nint> _targetableAddr = new(); // entity → Targetable component (0 = none)
     private readonly Dictionary<nint, nint> _pathfindingAddr = new(); // entity → Pathfinding component (0 = none)
+    private readonly Dictionary<nint, nint> _stateMachineAddr = new();
     private readonly Dictionary<nint, EntityCategory> _category = new();
     private readonly Dictionary<nint, string> _meta = new();
     private readonly Dictionary<nint, nint> _iconAddr = new();     // entity → MinimapIcon component (0 = none); game POI
     private readonly Dictionary<nint, uint> _idAt = new();         // entity address → last-seen std::map key id (recycle guard)
+    private readonly Dictionary<nint, long> _lifeRetryAt = new();
+    private readonly Dictionary<nint, int> _lifeReadFailures = new();
+    private readonly Dictionary<nint, LifeSample> _lastLife = new();
+    private readonly Dictionary<nint, long> _deadSince = new();
+    private readonly HashSet<uint> _completedIconIds = new();
+    private readonly HashSet<uint> _essenceAnchorIds = new();
+    private readonly HashSet<uint> _availableBreachIds = new();
+    private readonly HashSet<uint> _activatedRogueExileIds = new();
+    private readonly List<System.Numerics.Vector2> _completedMechanicPositions = new();
+    private readonly Dictionary<uint, EntityDot> _sleepingMechanics = new();
+    private readonly Dictionary<uint, int> _sleepingMechanicMisses = new();
+    private long _nextSleepingMechanicScan;
     private nint _entCacheKey;   // AreaInstance address the entity caches were built for
 
     // Reused across Entities() calls to avoid per-tick allocations. The std::map walk reads each
     // 48-byte node in ONE ReadProcessMemory (fields are contiguous), not 5 separate syscalls.
     private readonly Queue<nint> _entQueue = new();
     private readonly HashSet<nint> _entVisited = new();
+    private readonly HashSet<nint> _seenEntityAddresses = new();
+    private readonly List<nint> _evictionCandidates = new();
+    private readonly HashSet<uint> _liveEntityIds = new();
+    private readonly HashSet<uint> _observedSleepingIds = new();
+    private readonly List<uint> _sleepingRemovalIds = new();
+    private readonly Dictionary<(LeagueMechanic League, int X, int Y), int> _mechanicPositions = new();
+    private readonly HashSet<(int X, int Y)> _seenTransitionPositions = new();
     private readonly byte[] _nodeBuf = new byte[0x30];
     // Reused camera-matrix buffers (read every render frame).
     private readonly byte[] _camBytes = new byte[64];
+    private readonly byte[] _mapUiBytes = new byte[Poe2.MapUiElement.Zoom - Poe2.MapUiElement.Shift + sizeof(float)];
     private readonly float[] _camMatrix = new float[16];
     private readonly byte[] _atlasElementBytes = new byte[0x360];
 
@@ -45,6 +66,11 @@ public sealed class Poe2Live
     private readonly Dictionary<uint, EntityDot> _persistentCache = new();
     private nint _persistentCacheKey;  // AreaInstance the cache was built for
     public bool PersistEntities { get; set; } = true;
+    public double LastEntityScanMs { get; private set; }
+    public double LastSleepingScanMs { get; private set; }
+    public int LastAwakeMapSize { get; private set; }
+    public int LastSleepingMapSize { get; private set; }
+    public int LastReturnedEntityCount { get; private set; }
 
     public Poe2Live(MemoryReader reader, nint gameStateSlot)
     {
@@ -57,16 +83,21 @@ public sealed class Poe2Live
     /// <summary>Monster rarity from ObjectMagicProperties.Rarity. NonMonster = not applicable.</summary>
     public enum Rarity { Normal = 0, Magic = 1, Rare = 2, Unique = 3, NonMonster = -1 }
 
-    public enum LeagueMechanic { None, Expedition, Breach, Ritual, Delirium, Abyss, Incursion, Legion, Betrayal, Ultimatum, Sanctum, Delve, Heist, Blight, Hellscape }
+    public enum LeagueMechanic { None, Expedition, Breach, Ritual, Essence, Delirium, Abyss, RogueExile, Incursion, Legion, Betrayal, Ultimatum, Sanctum, Delve, Heist, Blight, Hellscape }
+
+    public enum EntityLifeState { NotApplicable, Unknown, Alive, Dead }
 
     public readonly record struct EntityDot(
         uint Id, nint Address, System.Numerics.Vector2 Grid, Vector3 World, EntityCategory Category, string Metadata,
-        int HpCur, int HpMax, bool Poi, byte Reaction, Rarity Rarity, bool Opened,
+        int HpCur, int HpMax, EntityLifeState LifeState, float DeadForSeconds,
+        bool Poi, byte Reaction, Rarity Rarity, bool Opened,
         bool IsBoss = false, bool IsTargetable = true, bool IsLocked = false, bool IsLarge = false,
         float Scale = 1f, int BaseSpeed = -1, LeagueMechanic League = LeagueMechanic.None,
-        bool IconComplete = false)
+        bool IconComplete = false, bool IsSleeping = false, bool IsMechanicAnchor = false)
     {
-        public bool IsAlive => HpMax <= 0 || HpCur > 0;
+        public bool IsAlive => LifeState is EntityLifeState.NotApplicable or EntityLifeState.Alive;
+        public bool IsDead => LifeState == EntityLifeState.Dead;
+        public bool IsLifeKnown => LifeState is EntityLifeState.Alive or EntityLifeState.Dead;
         public bool HasLife => HpMax > 0;
         public bool IsFriendly => (Reaction & 0x7F) == 1;
         public float HpFraction => HpMax > 0 ? Math.Clamp((float)HpCur / HpMax, 0f, 1f) : 1f;
@@ -126,24 +157,34 @@ public sealed class Poe2Live
         if (gameState == 0) return false;
 
         // InGameState = first element of the CurrentStatePtr StdVector; fall back to States[].
-        var candidates = new List<nint>(13);
         var vecFirst = Ptr(gameState + Poe2.GameState.CurrentStatePtr);
-        if (vecFirst != 0) candidates.Add(Ptr(vecFirst));
-        for (var i = 0; i < Poe2.GameState.StateSlotCount; i++)
-            candidates.Add(Ptr(gameState + Poe2.GameState.States + (nint)(i * Poe2.GameState.StateSlotStride)));
-
-        foreach (var igs in candidates)
+        var current = vecFirst != 0 ? Ptr(vecFirst) : 0;
+        if (TryResolveCandidate(current, out areaInstance, out localPlayer))
         {
-            if (igs == 0) continue;
-            var ai = Ptr(igs + Poe2.InGameState.AreaInstanceData);
-            if (ai == 0) continue;
-            var lp = Ptr(ai + Poe2.AreaInstance.LocalPlayer);
-            if (lp == 0) continue;
-            if (!ReadMetadata(lp).StartsWith("Metadata/", StringComparison.Ordinal)) continue;
-            inGameState = igs; areaInstance = ai; localPlayer = lp;
+            inGameState = current;
+            return true;
+        }
+
+        for (var i = 0; i < Poe2.GameState.StateSlotCount; i++)
+        {
+            var candidate = Ptr(gameState + Poe2.GameState.States + (nint)(i * Poe2.GameState.StateSlotStride));
+            if (candidate == current) continue;
+            if (!TryResolveCandidate(candidate, out areaInstance, out localPlayer)) continue;
+            inGameState = candidate;
             return true;
         }
         return false;
+    }
+
+    private bool TryResolveCandidate(nint inGameState, out nint areaInstance, out nint localPlayer)
+    {
+        areaInstance = localPlayer = 0;
+        if (inGameState == 0) return false;
+        areaInstance = Ptr(inGameState + Poe2.InGameState.AreaInstanceData);
+        if (areaInstance == 0) return false;
+        localPlayer = Ptr(areaInstance + Poe2.AreaInstance.LocalPlayer);
+        return localPlayer != 0 &&
+               ReadMetadata(localPlayer).StartsWith("Metadata/", StringComparison.Ordinal);
     }
 
     /// <summary>Per-area instance hash. (Caches key on the AreaInstance address; this is for display/ID.)</summary>
@@ -266,13 +307,28 @@ public sealed class Poe2Live
     private static bool ShouldPersist(EntityCategory cat) =>
         cat is EntityCategory.Transition or EntityCategory.Npc or EntityCategory.Chest;
 
-    public List<EntityDot> Entities(nint areaInstance)
+    private readonly record struct LifeSample(int Current, int Max, long ReadAt);
+    private const int MissingComponentRetryMs = 1000;
+    private const int LifeSampleGraceMs = 1200;
+    private const int LifeReadFailuresBeforeResolve = 3;
+
+    public List<EntityDot> Entities(nint areaInstance, bool includeSleepingMechanics = false)
     {
+        var scanStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         if (areaInstance != _entCacheKey)
         {
             _renderAddr.Clear(); _lifeAddr.Clear(); _posAddr.Clear(); _ompAddr.Clear(); _chestAddr.Clear();
             _monsterAddr.Clear(); _targetableAddr.Clear(); _pathfindingAddr.Clear();
+            _stateMachineAddr.Clear();
             _category.Clear(); _meta.Clear(); _iconAddr.Clear(); _idAt.Clear();
+            _lifeRetryAt.Clear(); _lifeReadFailures.Clear(); _lastLife.Clear(); _deadSince.Clear();
+            _completedIconIds.Clear();
+            _essenceAnchorIds.Clear();
+            _availableBreachIds.Clear();
+            _activatedRogueExileIds.Clear();
+            _completedMechanicPositions.Clear();
+            _sleepingMechanics.Clear(); _sleepingMechanicMisses.Clear();
+            _nextSleepingMechanicScan = 0;
             _entCacheKey = areaInstance;
         }
         if (!PersistEntities)
@@ -284,14 +340,17 @@ public sealed class Poe2Live
         }
 
         var dots = new List<EntityDot>(256);
-        var liveIds = new HashSet<uint>();
+        var liveIds = _liveEntityIds;
+        liveIds.Clear();
         var head = Ptr(areaInstance + Poe2.AreaInstance.AwakeEntities);
         _reader.TryReadStruct<int>(areaInstance + Poe2.AreaInstance.AwakeEntities + 8, out var size);
-        if (head == 0 || size <= 0 || size > 100000) goto merge;
+        LastAwakeMapSize = size;
+        if (head == 0 || size <= 0 || size > 100000) goto sleeping;
 
         var root = Ptr(head + Poe2.StdMapNode.Parent);
         _entQueue.Clear(); _entQueue.Enqueue(root);
         _entVisited.Clear();
+        _seenEntityAddresses.Clear();
         while (_entQueue.Count > 0 && _entVisited.Count < 200000)
         {
             var node = _entQueue.Dequeue();
@@ -308,6 +367,7 @@ public sealed class Poe2Live
             _entQueue.Enqueue((nint)BitConverter.ToInt64(_nodeBuf, Poe2.StdMapNode.Right));
 
             if (entity == 0 || id >= Poe2.EntityList.VisualIdThreshold) continue;
+            _seenEntityAddresses.Add(entity);
 
             // Recycle guard: entity addresses are reused within an area. If this address now
             // carries a different id, the prior occupant is gone — evict stale component caches.
@@ -320,13 +380,16 @@ public sealed class Poe2Live
 
             var cat = Categorize(entity);
             int hpCur = 0, hpMax = 0;
+            var lifeState = EntityLifeState.NotApplicable;
+            var deadForSeconds = 0f;
             var rarity = Rarity.NonMonster;
             var opened = false;
             bool isBoss = false, isLocked = false, isLarge = false;
             bool isTargetable = true;
             float scale = 1f;
             int baseSpeed = -1;
-            if (cat is EntityCategory.Monster or EntityCategory.Player) (hpCur, hpMax) = ReadHp(entity);
+            if (cat is EntityCategory.Monster or EntityCategory.Player)
+                (hpCur, hpMax, lifeState, deadForSeconds) = ReadHp(entity);
             if (cat is EntityCategory.Monster or EntityCategory.Chest) rarity = ReadRarity(entity);
             if (cat == EntityCategory.Monster) isBoss = ReadIsBoss(entity);
             if (cat == EntityCategory.Chest) { opened = ReadChestOpened(entity); isLocked = ReadIsLocked(entity); isLarge = ReadIsLarge(entity); }
@@ -334,28 +397,134 @@ public sealed class Poe2Live
             scale = ReadScale(entity);
             baseSpeed = ReadBaseSpeed(entity);
 
-            var league = DetectLeague(_meta.GetValueOrDefault(entity, ""));
-            var (poi, iconComplete) = ReadIcon(entity);
-            var dot = new EntityDot(id, entity, g, wv, cat, _meta.GetValueOrDefault(entity, ""), hpCur, hpMax,
+            var metadata = _meta.GetValueOrDefault(entity, "");
+            var league = DetectLeague(metadata);
+            var (poi, iconCompleteNow) = ReadIcon(entity);
+            var likelyEssence = _essenceAnchorIds.Contains(id) ||
+                IsLikelyEssenceAnchor(metadata, cat, poi, isTargetable);
+            if (likelyEssence)
+            {
+                _essenceAnchorIds.Add(id);
+                league = LeagueMechanic.Essence;
+            }
+            var mechanicAnchor = IsPreloadedMechanicAnchor(metadata) || likelyEssence;
+
+            // Expedition state 7 was observed when its completion icon flipped and its
+            // reward chest spawned. Use it if the minimap component is briefly unavailable.
+            if (mechanicAnchor &&
+                league == LeagueMechanic.Expedition &&
+                ReadPrimaryStateValue(entity) >= 7)
+                iconCompleteNow = true;
+            if (mechanicAnchor &&
+                league == LeagueMechanic.Ritual &&
+                ReadPrimaryStateValue(entity) >= 3)
+                iconCompleteNow = true;
+
+            if (mechanicAnchor && league == LeagueMechanic.Breach)
+            {
+                // BrequelInitiator was observed at 0=idle, 1=available, 2=active,
+                // 4=completed. Prefer that authoritative state over targetability.
+                if (ReadPrimaryStateValue(entity) >= 4)
+                    iconCompleteNow = true;
+                else if (isTargetable)
+                    _availableBreachIds.Add(id);
+                else if (_availableBreachIds.Contains(id))
+                    iconCompleteNow = true;
+            }
+            if (mechanicAnchor && league == LeagueMechanic.RogueExile)
+            {
+                // Rogue Exiles are preloaded with a 0/max Life block before activation.
+                // Only treat zero life as completion after this exact entity has been alive.
+                if (lifeState == EntityLifeState.Alive)
+                    _activatedRogueExileIds.Add(id);
+                else if (lifeState == EntityLifeState.Dead && _activatedRogueExileIds.Contains(id))
+                    iconCompleteNow = true;
+            }
+            if (iconCompleteNow) _completedIconIds.Add(id);
+            if (iconCompleteNow && mechanicAnchor) RememberCompletedMechanicPosition(g);
+            var iconComplete = _completedIconIds.Contains(id) ||
+                               (mechanicAnchor && IsCompletedMechanicPosition(g));
+            var dot = new EntityDot(id, entity, g, wv, cat, metadata,
+                hpCur, hpMax, lifeState, deadForSeconds,
                 poi, ReadReaction(entity), rarity, opened,
-                isBoss, isTargetable, isLocked, isLarge, scale, baseSpeed, league, iconComplete);
+                isBoss, isTargetable, isLocked, isLarge, scale, baseSpeed, league, iconComplete,
+                IsSleeping: false, IsMechanicAnchor: mechanicAnchor);
             dots.Add(dot);
             liveIds.Add(id);
 
-            if (ShouldPersist(cat))
+            // Mechanic anchors are often removed from both entity maps when their world chunk
+            // unloads. Retain the last stable position so a discovered encounter does not vanish
+            // merely because the player moved away from it.
+            if (ShouldPersist(cat) || mechanicAnchor)
                 _persistentCache[id] = dot;
         }
 
-        merge:
+        _evictionCandidates.Clear();
+        foreach (var entity in _idAt.Keys)
+            if (!_seenEntityAddresses.Contains(entity))
+                _evictionCandidates.Add(entity);
+        foreach (var entity in _evictionCandidates)
+            EvictEntity(entity);
+
+        sleeping:
+        if (includeSleepingMechanics)
+        {
+            RefreshSleepingMechanics(areaInstance, liveIds);
+            foreach (var (id, sleeping) in _sleepingMechanics)
+                if (!liveIds.Contains(id) && !sleeping.IconComplete)
+                    dots.Add(sleeping);
+        }
+        else
+        {
+            foreach (var sleeping in _sleepingMechanics.Values)
+                EvictEntity(sleeping.Address);
+            _sleepingMechanics.Clear();
+            _sleepingMechanicMisses.Clear();
+        }
+
+        for (var i = 0; i < dots.Count; i++)
+            if (dots[i].IsMechanicAnchor &&
+                !dots[i].IconComplete &&
+                IsCompletedMechanicPosition(dots[i].Grid))
+                dots[i] = dots[i] with { IconComplete = true };
+
         foreach (var (id, cached) in _persistentCache)
         {
             if (liveIds.Contains(id)) continue;
             if (cached.Category == EntityCategory.Chest && cached.Opened) continue;
+            if (cached.IsMechanicAnchor && cached.IconComplete) continue;
             dots.Add(cached);
         }
 
+        // Several mechanics expose both a preload object and an interactable at the same spot.
+        // Keep one marker, preferring the POI-bearing and awake representation.
+        var mechanicPositions = _mechanicPositions;
+        mechanicPositions.Clear();
+        for (var i = 0; i < dots.Count; i++)
+        {
+            var candidate = dots[i];
+            if (!candidate.IsMechanicAnchor) continue;
+            var key = (
+                candidate.League,
+                (int)MathF.Round(candidate.Grid.X / 4f),
+                (int)MathF.Round(candidate.Grid.Y / 4f));
+            if (!mechanicPositions.TryGetValue(key, out var existingIndex))
+            {
+                mechanicPositions[key] = i;
+                continue;
+            }
+
+            var existing = dots[existingIndex];
+            var candidateRank = (candidate.Poi ? 2 : 0) + (candidate.IsSleeping ? 0 : 1);
+            var existingRank = (existing.Poi ? 2 : 0) + (existing.IsSleeping ? 0 : 1);
+            if (candidateRank > existingRank)
+                dots[existingIndex] = candidate;
+            dots.RemoveAt(i--);
+        }
+
         // Dedup transitions stacked at the same grid cell (game spawns many overlapping transition entities)
-        var seenTransPos = new HashSet<(int, int)>();
+        var seenTransPos = _seenTransitionPositions;
+        seenTransPos.Clear();
         for (int i = dots.Count - 1; i >= 0; i--)
         {
             if (dots[i].Category != EntityCategory.Transition) continue;
@@ -364,15 +533,151 @@ public sealed class Poe2Live
                 dots.RemoveAt(i);
         }
 
+        LastReturnedEntityCount = dots.Count;
+        LastEntityScanMs = System.Diagnostics.Stopwatch.GetElapsedTime(scanStarted).TotalMilliseconds;
         return dots;
+    }
+
+    private void RefreshSleepingMechanics(nint areaInstance, HashSet<uint> awakeIds)
+    {
+        var now = Environment.TickCount64;
+        if (now < _nextSleepingMechanicScan) return;
+        _nextSleepingMechanicScan = now + 1000;
+        var scanStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        var observed = _observedSleepingIds;
+        observed.Clear();
+        var head = Ptr(areaInstance + Poe2.AreaInstance.SleepingEntities);
+        _reader.TryReadStruct<int>(areaInstance + Poe2.AreaInstance.SleepingEntities + 8, out var size);
+        LastSleepingMapSize = size;
+        if (head != 0 && size is > 0 and <= 100000)
+        {
+            _entQueue.Clear();
+            _entQueue.Enqueue(Ptr(head + Poe2.StdMapNode.Parent));
+            _entVisited.Clear();
+            while (_entQueue.Count > 0 && _entVisited.Count < 200000)
+            {
+                var node = _entQueue.Dequeue();
+                if (node == 0 || node == head || !_entVisited.Add(node)) continue;
+                if (_reader.TryReadBytes(node, _nodeBuf) < _nodeBuf.Length) continue;
+                if (_nodeBuf[Poe2.StdMapNode.IsNil] != 0) continue;
+
+                _entQueue.Enqueue((nint)BitConverter.ToInt64(_nodeBuf, Poe2.StdMapNode.Left));
+                _entQueue.Enqueue((nint)BitConverter.ToInt64(_nodeBuf, Poe2.StdMapNode.Right));
+                var id = BitConverter.ToUInt32(_nodeBuf, Poe2.StdMapNode.KeyId);
+                var entity = (nint)BitConverter.ToInt64(_nodeBuf, Poe2.StdMapNode.ValueEntityPtr);
+                if (entity == 0 || id >= Poe2.EntityList.VisualIdThreshold || awakeIds.Contains(id)) continue;
+
+                var metadata = ReadMetadata(entity);
+                var metadataAnchor = IsPreloadedMechanicAnchor(metadata);
+                if (!metadataAnchor) continue;
+                var category = Categorize(entity);
+                var (poi, iconCompleteNow) = ReadIcon(entity);
+                var isTargetable = ReadIsTargetable(entity);
+
+                var world = EntityWorld(entity);
+                if (world is not { } wv) continue;
+                var grid = new System.Numerics.Vector2(
+                    wv.X / Poe2.WorldToGridRatio,
+                    wv.Y / Poe2.WorldToGridRatio);
+
+                if (_sleepingMechanics.TryGetValue(id, out var old) && old.Address != entity)
+                    EvictEntity(old.Address);
+
+                var league = DetectLeague(metadata);
+                if (league == LeagueMechanic.Expedition &&
+                    ReadPrimaryStateValue(entity) >= 7)
+                    iconCompleteNow = true;
+                if (league == LeagueMechanic.Ritual &&
+                    ReadPrimaryStateValue(entity) >= 3)
+                    iconCompleteNow = true;
+                if (league == LeagueMechanic.Breach)
+                {
+                    if (ReadPrimaryStateValue(entity) >= 4)
+                        iconCompleteNow = true;
+                    else if (isTargetable)
+                        _availableBreachIds.Add(id);
+                    else if (_availableBreachIds.Contains(id))
+                        iconCompleteNow = true;
+                }
+                if (league == LeagueMechanic.RogueExile)
+                {
+                    var life = ReadHp(entity);
+                    if (life.state == EntityLifeState.Alive)
+                        _activatedRogueExileIds.Add(id);
+                    else if (life.state == EntityLifeState.Dead && _activatedRogueExileIds.Contains(id))
+                        iconCompleteNow = true;
+                }
+                if (iconCompleteNow) _completedIconIds.Add(id);
+                if (iconCompleteNow) RememberCompletedMechanicPosition(grid);
+                var complete = _completedIconIds.Contains(id) || IsCompletedMechanicPosition(grid);
+                var dot = new EntityDot(
+                    id, entity, grid, wv, category, metadata,
+                    0, 0, EntityLifeState.NotApplicable, 0f,
+                    poi, ReadReaction(entity), Rarity.NonMonster, false,
+                    IsTargetable: isTargetable,
+                    League: league,
+                    IconComplete: complete,
+                    IsSleeping: true,
+                    IsMechanicAnchor: true);
+                _sleepingMechanics[id] = dot;
+                if (PersistEntities)
+                    _persistentCache[id] = dot;
+                _sleepingMechanicMisses.Remove(id);
+                observed.Add(id);
+            }
+        }
+
+        _sleepingRemovalIds.Clear();
+        foreach (var (id, _) in _sleepingMechanics)
+        {
+            if (awakeIds.Contains(id))
+            {
+                _sleepingRemovalIds.Add(id);
+                continue;
+            }
+            if (observed.Contains(id)) continue;
+            var misses = _sleepingMechanicMisses.GetValueOrDefault(id) + 1;
+            if (misses < 3)
+            {
+                _sleepingMechanicMisses[id] = misses;
+                continue;
+            }
+            _sleepingRemovalIds.Add(id);
+        }
+
+        foreach (var id in _sleepingRemovalIds)
+        {
+            if (_sleepingMechanics.Remove(id, out var dot) && !awakeIds.Contains(id))
+                EvictEntity(dot.Address);
+            _sleepingMechanicMisses.Remove(id);
+        }
+
+        LastSleepingScanMs = System.Diagnostics.Stopwatch.GetElapsedTime(scanStarted).TotalMilliseconds;
+    }
+
+    private void RememberCompletedMechanicPosition(System.Numerics.Vector2 grid)
+    {
+        if (!IsCompletedMechanicPosition(grid))
+            _completedMechanicPositions.Add(grid);
+    }
+
+    private bool IsCompletedMechanicPosition(System.Numerics.Vector2 grid)
+    {
+        foreach (var completed in _completedMechanicPositions)
+            if (System.Numerics.Vector2.DistanceSquared(completed, grid) <= 100f)
+                return true;
+        return false;
     }
 
     private void EvictEntity(nint entity)
     {
         _renderAddr.Remove(entity); _lifeAddr.Remove(entity); _posAddr.Remove(entity);
         _ompAddr.Remove(entity); _chestAddr.Remove(entity); _monsterAddr.Remove(entity);
-        _targetableAddr.Remove(entity); _pathfindingAddr.Remove(entity);
+        _targetableAddr.Remove(entity); _pathfindingAddr.Remove(entity); _stateMachineAddr.Remove(entity);
         _category.Remove(entity); _meta.Remove(entity); _iconAddr.Remove(entity);
+        _lifeRetryAt.Remove(entity); _lifeReadFailures.Remove(entity);
+        _lastLife.Remove(entity); _deadSince.Remove(entity); _idAt.Remove(entity);
     }
 
     /// <summary>
@@ -404,6 +709,25 @@ public sealed class Poe2Live
         return (Rarity)r;
     }
 
+    private long ReadPrimaryStateValue(nint entity)
+    {
+        if (!_stateMachineAddr.TryGetValue(entity, out var stateMachine))
+        {
+            stateMachine = ResolveComponent(entity, "StateMachine");
+            _stateMachineAddr[entity] = stateMachine;
+        }
+        if (stateMachine == 0 ||
+            !_reader.TryReadStruct<StdVector>(
+                stateMachine + Poe2.StateMachine.StateValues,
+                out var values) ||
+            values.First == 0 ||
+            values.Last < values.First ||
+            (long)values.Last - (long)values.First < sizeof(long))
+            return -1;
+
+        return _reader.TryReadStruct<long>(values.First, out var value) ? value : -1;
+    }
+
     private byte ReadReaction(nint entity)
     {
         if (!_posAddr.TryGetValue(entity, out var pos))
@@ -415,16 +739,68 @@ public sealed class Poe2Live
         return _reader.TryReadStruct<byte>(pos + Poe2.Positioned.Reaction, out var b) ? b : (byte)0;
     }
 
-    private (int cur, int max) ReadHp(nint entity)
+    private (int cur, int max, EntityLifeState state, float deadForSeconds) ReadHp(nint entity)
     {
+        var now = Environment.TickCount64;
         if (!_lifeAddr.TryGetValue(entity, out var life))
         {
             life = ResolveComponent(entity, "Life");
             _lifeAddr[entity] = life;
+            if (life == 0) _lifeRetryAt[entity] = now + MissingComponentRetryMs;
         }
-        if (life == 0) return (0, 0);
-        if (!_reader.TryReadStruct<VitalStruct>(life + _healthOff, out var v)) return (0, 0);
-        return (v.Current, v.Max);
+        else if (life == 0 &&
+                 (!_lifeRetryAt.TryGetValue(entity, out var retryAt) || now >= retryAt))
+        {
+            life = ResolveComponent(entity, "Life");
+            _lifeAddr[entity] = life;
+            _lifeRetryAt[entity] = now + MissingComponentRetryMs;
+        }
+        if (life == 0) return LastLifeOrUnknown(entity, now);
+
+        if (!_reader.TryReadStruct<VitalStruct>(life + _healthOff, out var v) || !v.LooksValid())
+        {
+            var failures = _lifeReadFailures.GetValueOrDefault(entity) + 1;
+            _lifeReadFailures[entity] = failures;
+            if (failures >= LifeReadFailuresBeforeResolve)
+            {
+                _lifeAddr[entity] = 0;
+                _lifeRetryAt[entity] = now + MissingComponentRetryMs;
+                _lifeReadFailures.Remove(entity);
+            }
+            return LastLifeOrUnknown(entity, now);
+        }
+
+        _lifeReadFailures.Remove(entity);
+        _lifeRetryAt.Remove(entity);
+        _lastLife[entity] = new LifeSample(v.Current, v.Max, now);
+
+        if (v.Current > 0)
+        {
+            _deadSince.Remove(entity);
+            return (v.Current, v.Max, EntityLifeState.Alive, 0f);
+        }
+
+        if (!_deadSince.TryGetValue(entity, out var deadSince))
+        {
+            deadSince = now;
+            _deadSince[entity] = deadSince;
+        }
+        return (v.Current, v.Max, EntityLifeState.Dead, Math.Max(0f, (now - deadSince) / 1000f));
+    }
+
+    private (int cur, int max, EntityLifeState state, float deadForSeconds) LastLifeOrUnknown(nint entity, long now)
+    {
+        if (!_lastLife.TryGetValue(entity, out var sample))
+            return (0, 0, EntityLifeState.Unknown, 0f);
+
+        if (now - sample.ReadAt > LifeSampleGraceMs)
+            return (sample.Current, sample.Max, EntityLifeState.Unknown, 0f);
+
+        if (sample.Current > 0)
+            return (sample.Current, sample.Max, EntityLifeState.Alive, 0f);
+
+        var deadSince = _deadSince.GetValueOrDefault(entity, sample.ReadAt);
+        return (sample.Current, sample.Max, EntityLifeState.Dead, Math.Max(0f, (now - deadSince) / 1000f));
     }
 
     private List<Landmark>? _landmarks;
@@ -807,22 +1183,38 @@ public sealed class Poe2Live
     private bool TryReadMapElement(nint el, out bool visible, out float shiftX, out float shiftY, out float zoom)
     {
         visible = false; shiftX = shiftY = zoom = 0;
-        if (!LooksLikeMapElement(el)) return false;
-        _reader.TryReadStruct<float>(el + Poe2.MapUiElement.Shift, out shiftX);
-        _reader.TryReadStruct<float>(el + Poe2.MapUiElement.Shift + 4, out shiftY);
-        _reader.TryReadStruct<float>(el + Poe2.MapUiElement.Zoom, out zoom);
-        if (MathF.Abs(shiftX) > 10000f || MathF.Abs(shiftY) > 10000f) return false;
+        if (!TryReadMapValues(el, out shiftX, out shiftY, out zoom)) return false;
         visible = IsVisible(el);
         return true;
     }
 
     private bool LooksLikeMapElement(nint el)
     {
-        if (el == 0) return false;
-        if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.DefaultShift, out var dsx)) return false;
-        if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.DefaultShift + 4, out var dsy)) return false;
-        if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.Zoom, out var zoom)) return false;
-        return MathF.Abs(dsx) < 0.01f && MathF.Abs(dsy + 20f) < 0.01f && zoom is > 0.05f and < 8f;
+        return TryReadMapValues(el, out _, out _, out _);
+    }
+
+    private bool TryReadMapValues(nint el, out float shiftX, out float shiftY, out float zoom)
+    {
+        shiftX = shiftY = zoom = 0f;
+        if (el == 0 || _reader.TryReadBytes(el + Poe2.MapUiElement.Shift, _mapUiBytes) < _mapUiBytes.Length)
+            return false;
+
+        var defaultOffset = Poe2.MapUiElement.DefaultShift - Poe2.MapUiElement.Shift;
+        var zoomOffset = Poe2.MapUiElement.Zoom - Poe2.MapUiElement.Shift;
+        shiftX = BitConverter.ToSingle(_mapUiBytes, 0);
+        shiftY = BitConverter.ToSingle(_mapUiBytes, sizeof(float));
+        var defaultX = BitConverter.ToSingle(_mapUiBytes, defaultOffset);
+        var defaultY = BitConverter.ToSingle(_mapUiBytes, defaultOffset + sizeof(float));
+        zoom = BitConverter.ToSingle(_mapUiBytes, zoomOffset);
+
+        return float.IsFinite(shiftX) &&
+               float.IsFinite(shiftY) &&
+               float.IsFinite(zoom) &&
+               MathF.Abs(shiftX) <= 10000f &&
+               MathF.Abs(shiftY) <= 10000f &&
+               MathF.Abs(defaultX) < 0.01f &&
+               MathF.Abs(defaultY + 20f) < 0.01f &&
+               zoom is > 0.05f and < 8f;
     }
 
     private float LargeMapScore(nint el, MapUi ui)
@@ -981,12 +1373,17 @@ public sealed class Poe2Live
     private static LeagueMechanic DetectLeague(string meta)
     {
         if (string.IsNullOrEmpty(meta)) return LeagueMechanic.None;
-        if (!meta.Contains("/Monsters/", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.None;
         if (meta.Contains("Expedition", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Expedition;
-        if (meta.Contains("/Breach", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Breach;
+        if (meta.Contains("/Breach", StringComparison.OrdinalIgnoreCase) ||
+            meta.Contains("Brequel", StringComparison.OrdinalIgnoreCase))
+            return LeagueMechanic.Breach;
         if (meta.Contains("Ritual", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Ritual;
         if (meta.Contains("Delirium", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Delirium;
+        if (meta.Contains("Essence", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Essence;
         if (meta.Contains("Abyss", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Abyss;
+        if (meta.Contains("/RogueExiles/", StringComparison.OrdinalIgnoreCase) ||
+            meta.Contains("/AtlasExiles/", StringComparison.OrdinalIgnoreCase))
+            return LeagueMechanic.RogueExile;
         if (meta.Contains("Incursion", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Incursion;
         if (meta.Contains("Legion", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Legion;
         if (meta.Contains("Betrayal", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Betrayal;
@@ -997,6 +1394,55 @@ public sealed class Poe2Live
         if (meta.Contains("Blight", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Blight;
         if (meta.Contains("Hellscape", StringComparison.OrdinalIgnoreCase)) return LeagueMechanic.Hellscape;
         return LeagueMechanic.None;
+    }
+
+    private static bool IsPreloadedMechanicAnchor(string meta)
+    {
+        if (string.IsNullOrEmpty(meta)) return false;
+        if (meta.Contains("Expedition2EncounterCrack", StringComparison.OrdinalIgnoreCase))
+            return false;
+        ReadOnlySpan<string> anchors =
+        [
+            "RitualRuneObject",
+            "RitualRuneInteractable",
+            "Expedition2Encounter",
+            "DeliriumInitiator",
+            "IncursionPedestalEncounter",
+            "TemplePortal",
+            "/StrongBoxes/",
+            "Metadata/Shrines/Shrine",
+            "EssenceMonolith",
+            "BrequelInitiator",
+            "BreachStart",
+            "BreachObject",
+            "BreachPortal",
+            "AbyssJumpInteractable",
+            "AbyssFinalNodeBase",
+            "AbyssStart",
+            "AbyssNode",
+            "/Monsters/RogueExiles/",
+            "/Monsters/AtlasExiles/",
+            "LegionInitiator",
+            "BlightPump",
+            "UltimatumChallenge",
+            "HarvestPortal",
+        ];
+        foreach (var anchor in anchors)
+            if (meta.Contains(anchor, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    private static bool IsLikelyEssenceAnchor(
+        string metadata,
+        EntityCategory category,
+        bool hasMinimapIcon,
+        bool isTargetable)
+    {
+        // Do not infer Essence from a generic sleeping, untargetable monster POI. Breach, Abyss,
+        // Beyond, and Rogue Exile monsters share that shape and produced extensive false positives
+        // in live captures. Keep this hook for a future verified modifier/component signature.
+        return false;
     }
 
     /// <summary>Resolve a component address by name. Public for use by the component inspector.</summary>
@@ -1054,6 +1500,8 @@ public sealed class Poe2Live
     /// <summary>True for "/Monsters/" entities that aren't real fight targets (effects / summons).</summary>
     private static bool IsNonCombat(string meta) =>
         meta.Contains("MonsterMods", StringComparison.Ordinal) ||
+        meta.Contains("EssenceModDaemons", StringComparison.Ordinal) ||
+        meta.Contains("RuneEncounterController", StringComparison.Ordinal) ||
         meta.Contains("Summoned", StringComparison.Ordinal) ||
         meta.Contains("/Daemon/", StringComparison.Ordinal) ||
         meta.Contains("Invisible", StringComparison.Ordinal);

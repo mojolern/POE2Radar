@@ -157,6 +157,8 @@ public sealed class RadarSettings
 
     // Performance
     public int FpsCap { get; set; } = 60;
+    public bool ShowPerformanceDiagnostics { get; set; }
+    public bool FastTerrainSampling { get; set; }
 
     // Calibration
     public float OffsetX { get; set; }
@@ -192,7 +194,11 @@ public sealed class RadarSettings
     public bool ShowFriendlyEntities { get; set; } = true;
     public bool ShowImmobileEntities { get; set; } = true;
     public bool ShowMechanicIcons { get; set; } = true;
+    public bool ShowMechanicMonsters { get; set; } = false;
+    public bool ShowMechanicLabels { get; set; } = false;
+    public bool ShowPreloadedMechanicLocations { get; set; } = true;
     public bool HideDeadMechanicMonsters { get; set; } = true;
+    public float MechanicDeadFadeSeconds { get; set; } = 0f;
     public bool ShowMechanicNonMonsterIcons { get; set; } = false;
     public float EntityDrawRange { get; set; } = 0f;
     public float MinEntityHpPct { get; set; } = 0f;
@@ -316,15 +322,26 @@ public sealed class RadarSettings
     public static RadarSettings Load(string path)
     {
         RadarSettings s;
+        var migrateQuietMechanics = false;
         try
         {
             if (File.Exists(path))
-                s = JsonSerializer.Deserialize<RadarSettings>(File.ReadAllText(path), JsonOpts) ?? new();
+            {
+                var json = File.ReadAllText(path);
+                migrateQuietMechanics = !json.Contains("\"showMechanicMonsters\"", StringComparison.OrdinalIgnoreCase);
+                s = JsonSerializer.Deserialize<RadarSettings>(json, JsonOpts) ?? new();
+            }
             else
                 s = new();
         }
         catch { s = new(); }
         s._filePath = path;
+        if (migrateQuietMechanics)
+        {
+            s.ShowMechanicMonsters = false;
+            s.ShowMechanicLabels = false;
+            s.Save();
+        }
         return s;
     }
 
@@ -399,7 +416,9 @@ public sealed class RadarStyles
     {
         new() { Name = "Expedition", Match = ["ExpeditionEncounter", "Expedition"], Shape = "Plus",     Color = "#26E6D9", Opacity = 1f, Size = 7f },
         new() { Name = "Ritual",     Match = ["Ritual"],                            Shape = "Star",     Color = "#FF3355", Opacity = 1f, Size = 7f },
-        new() { Name = "Breach",     Match = ["Breach"],                            Shape = "Diamond",  Color = "#A64DFF", Opacity = 1f, Size = 7f },
+        new() { Name = "Breach",     Match = ["Breach", "Brequel"],                 Shape = "Diamond",  Color = "#A64DFF", Opacity = 1f, Size = 7f },
+        new() { Name = "Abyss",      Match = ["AbyssJumpInteractable", "Abyss"],    Shape = "Diamond",  Color = "#4DD966", Opacity = 1f, Size = 7f },
+        new() { Name = "Rogue Exile", Match = ["/RogueExiles/", "/AtlasExiles/"],   Shape = "Star",     Color = "#FF704D", Opacity = 1f, Size = 7f },
         new() { Name = "Strongbox",  Match = ["Strongbox", "StrongBoxes"],          Shape = "Square",   Color = "#FFB300", Opacity = 1f, Size = 6f },
         new() { Name = "Essence",    Match = ["Essence"],                           Shape = "Triangle", Color = "#33E0FF", Opacity = 1f, Size = 7f },
         new() { Name = "Shrine",     Match = ["Shrine"],                            Shape = "Star",     Color = "#7DFF7D", Opacity = 1f, Size = 6f },

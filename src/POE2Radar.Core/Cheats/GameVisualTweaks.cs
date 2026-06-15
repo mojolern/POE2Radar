@@ -205,7 +205,7 @@ public sealed class GameVisualTweaks
                 if (life != 0)
                 {
                     // ⚠ These offsets (IDA-sourced) need revalidation after the 2026-06-04 vital-block shift
-                    if (PreventCorpseSinking && !e.IsAlive) wrote |= WriteByte(life + 0xE4, 1);
+                    if (PreventCorpseSinking && e.IsDead) wrote |= WriteByte(life + 0xE4, 1);
                     if (DevCorpseUsable) wrote |= WriteByte(life + 0xE7, 1);
                     if (DevNoCorpseMarker) wrote |= WriteByte(life + 0xE5, 1);
                 }

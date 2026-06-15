@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NumVec2 = System.Numerics.Vector2;
 using POE2Radar.Core;
@@ -16,12 +17,15 @@ namespace POE2Radar.Overlay;
 
 public sealed class RadarApp : IDisposable
 {
-    private const int TargetHz = 144;
     private const int WorldHz = 30;
+    private const int AtlasHz = 60;
+    private const int MaxSoftwareRenderHz = 60;
 
     private readonly ProcessHandle _process;
     private readonly MemoryReader _reader;
     private readonly Poe2Live _live;
+    private readonly Poe2Live _terrainLive;
+    private readonly Poe2Live _landmarkLive;
     private readonly Poe2Atlas _atlas;
     private readonly CheatManager _cheats;
     private readonly OverlayWindow _window;
@@ -38,13 +42,33 @@ public sealed class RadarApp : IDisposable
     private volatile RadarState _state = RadarState.Empty;
 
     private DateTime _worldAt = DateTime.MinValue;
+    private DateTime _atlasAt = DateTime.MinValue;
     private List<Poe2Live.EntityDot> _entities = new();
     private IReadOnlyList<Poe2Live.Landmark> _landmarks = Array.Empty<Poe2Live.Landmark>();
     private Poe2Live.TerrainData? _terrain;
+    private Task<(nint Area, Poe2Live.TerrainData? Data, double ElapsedMs)>? _terrainLoadTask;
+    private Task<(nint Area, Poe2Live.Landmark[] Data, double ElapsedMs)>? _landmarkLoadTask;
+    private nint _terrainLoadedArea;
+    private nint _landmarksLoadedArea;
     private uint _areaHash;
     private nint _lastAreaInstance;
     private nint _gameHwnd;
+    private bool _mapWasVisible;
     private volatile bool _shutdown;
+    private long _perfWindowStarted = Stopwatch.GetTimestamp();
+    private int _perfFrameCount;
+    private double _perfTickTotalMs;
+    private double _perfTickMaxMs;
+    private double _perfRenderTotalMs;
+    private double _perfRenderMaxMs;
+    private double _perfDrawTotalMs;
+    private double _perfDrawMaxMs;
+    private double _perfEndDrawTotalMs;
+    private double _perfEndDrawMaxMs;
+    private double _perfPresentTotalMs;
+    private double _perfPresentMaxMs;
+    private double _perfFogTotalMs;
+    private double _perfFogMaxMs;
 
     private DateTime _nextKeyAt = DateTime.MinValue;
     private List<(int X, int Y)>? _pathPoints;
@@ -97,6 +121,8 @@ public sealed class RadarApp : IDisposable
         _process = process;
         _reader = reader;
         _live = new Poe2Live(reader, gameStateSlot);
+        _terrainLive = new Poe2Live(reader, gameStateSlot);
+        _landmarkLive = new Poe2Live(reader, gameStateSlot);
         _atlas = new Poe2Atlas(reader);
         _cheats = new CheatManager(process, reader);
         Console.WriteLine("\nScanning cheat patterns...");
@@ -106,6 +132,14 @@ public sealed class RadarApp : IDisposable
         _renderer = new OverlayRenderer(_window);
         var configDir = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "config");
         _radarSettings = RadarSettings.Load(Path.Combine(configDir, "radar_settings.json"));
+        if (_radarSettings.FpsCap > MaxSoftwareRenderHz)
+        {
+            Console.WriteLine(
+                $"Overlay FPS cap reduced from {_radarSettings.FpsCap} to {MaxSoftwareRenderHz}: " +
+                "the layered-window compositor is software-rendered.");
+            _radarSettings.FpsCap = MaxSoftwareRenderHz;
+            _radarSettings.Save();
+        }
         _watched = new WatchedEntities(Path.Combine(configDir, "watched_entities.json"));
         _hidden = new HiddenEntities(Path.Combine(configDir, "hidden_entities.json"));
         _pathing = new PathingTargets(Path.Combine(configDir, "pathing_targets.json"));
@@ -139,21 +173,43 @@ public sealed class RadarApp : IDisposable
 
     public void Run()
     {
-        var targetMs = 1000 / TargetHz;
         _gameHwnd = OverlayNative.FindWindowForProcess(_process.ProcessId);
+        var nextFrame = Stopwatch.GetTimestamp();
         while (!_shutdown)
         {
             if (_gameHwnd == 0) _gameHwnd = OverlayNative.FindWindowForProcess(_process.ProcessId);
             if (_gameHwnd != 0) _window.TrackGameWindow(_gameHwnd);
             if (!_window.PumpMessages()) break;
             Tick();
-            Thread.Sleep(targetMs);
+
+            var targetHz = Math.Clamp(_radarSettings.FpsCap, 15, MaxSoftwareRenderHz);
+            var frameTicks = Math.Max(1L, Stopwatch.Frequency / targetHz);
+            nextFrame += frameTicks;
+            var now = Stopwatch.GetTimestamp();
+            if (now > nextFrame)
+                nextFrame = now;
+            WaitUntil(nextFrame);
+        }
+    }
+
+    private static void WaitUntil(long deadline)
+    {
+        while (true)
+        {
+            var remaining = deadline - Stopwatch.GetTimestamp();
+            if (remaining <= 0) return;
+
+            var remainingMs = remaining * 1000.0 / Stopwatch.Frequency;
+            if (remainingMs > 2.0)
+                Thread.Sleep(Math.Max(1, (int)remainingMs - 1));
+            else
+                Thread.Yield();
         }
     }
 
     private void Tick()
     {
-        HandleCalibrationKeys();
+        var tickStarted = Stopwatch.GetTimestamp();
         HandleCheatKeys();
         HandleSettingsToggle();
         HandleAltClick();
@@ -168,7 +224,16 @@ public sealed class RadarApp : IDisposable
 
         if (inGame)
         {
-            if (areaInstance != _lastAreaInstance) { _terrain = null; _lastAreaInstance = areaInstance; }
+            if (areaInstance != _lastAreaInstance)
+            {
+                _terrain = null;
+                _landmarks = Array.Empty<Poe2Live.Landmark>();
+                _terrainLoadedArea = 0;
+                _landmarksLoadedArea = 0;
+                _lastAreaInstance = areaInstance;
+                BeginStaticAreaLoads(areaInstance);
+            }
+            PollStaticAreaLoads(areaInstance);
             _areaHash = _live.AreaHash(areaInstance);
             areaLevel = _live.AreaLevel(areaInstance);
 
@@ -186,11 +251,17 @@ public sealed class RadarApp : IDisposable
             _charName = _live.PlayerName(localPlayer);
             _charLevel = _live.PlayerLevel(localPlayer);
             _cameraMatrix = _live.CameraMatrix(inGameState);
+            var now = DateTime.UtcNow;
             if (_radarSettings.ShowAtlasNodes)
             {
-                _atlasNodes = _atlas.ReadNodes(inGameState);
                 atlasNodes = _atlasNodes;
-                _atlasMarks = BuildAtlasMarks(_atlasNodes);
+                if ((now - _atlasAt).TotalMilliseconds >= 1000.0 / AtlasHz)
+                {
+                    _atlasAt = now;
+                    _atlasNodes = _atlas.ReadNodes(inGameState);
+                    atlasNodes = _atlasNodes;
+                    _atlasMarks = BuildAtlasMarks(_atlasNodes);
+                }
             }
             else if (_atlasMarks.Count != 0)
             {
@@ -198,16 +269,18 @@ public sealed class RadarApp : IDisposable
             }
             TickAutoFlask(localPlayer);
 
-            var now = DateTime.UtcNow;
             if ((now - _worldAt).TotalMilliseconds >= 1000.0 / WorldHz)
             {
                 _worldAt = now;
-                _terrain ??= _live.Terrain(areaInstance);
-                _entities = _live.Entities(areaInstance);
-                _landmarks = _live.Landmarks(areaInstance);
+                _entities = _live.Entities(areaInstance, _radarSettings.ShowPreloadedMechanicLocations);
                 UpdatePath(player);
             }
         }
+
+        HandleCalibrationKeys();
+        if (map.IsVisible && !_mapWasVisible)
+            _renderer.ResetMapTracking();
+        _mapWasVisible = map.IsVisible;
 
         _state = new RadarState(inGame, _areaHash, areaLevel, map.IsVisible, map.Zoom, player, _entities, _landmarks,
             _hpPct, _manaPct, _autoFlask, _flaskNote, _areaCode, _charName, _charLevel,
@@ -262,7 +335,140 @@ public sealed class RadarApp : IDisposable
                 ? _atlas.LoadStatus
                 : null,
             AtlasLoadingProgress: _atlas.LoadProgress);
+        var renderStarted = Stopwatch.GetTimestamp();
         _renderer.Render(ctx);
+        TrackPerformance(tickStarted, Stopwatch.GetElapsedTime(renderStarted).TotalMilliseconds);
+    }
+
+    private void BeginStaticAreaLoads(nint areaInstance)
+    {
+        if (_terrainLoadedArea != areaInstance &&
+            (_terrainLoadTask is null or { IsCompleted: true }))
+        {
+            _terrainLoadTask = Task.Run(() =>
+            {
+                var started = Stopwatch.GetTimestamp();
+                var data = _terrainLive.Terrain(areaInstance);
+                return (areaInstance, data, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            });
+        }
+
+        if (_landmarksLoadedArea != areaInstance &&
+            (_landmarkLoadTask is null or { IsCompleted: true }))
+        {
+            _landmarkLoadTask = Task.Run(() =>
+            {
+                var started = Stopwatch.GetTimestamp();
+                var data = _landmarkLive.Landmarks(areaInstance).ToArray();
+                return (areaInstance, data, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            });
+        }
+    }
+
+    private void PollStaticAreaLoads(nint areaInstance)
+    {
+        if (_terrainLoadTask is { IsCompleted: true } terrainTask)
+        {
+            _terrainLoadTask = null;
+            try
+            {
+                var result = terrainTask.GetAwaiter().GetResult();
+                if (result.Area == areaInstance)
+                {
+                    _terrainLoadedArea = areaInstance;
+                    _terrain = result.Data;
+                    if (_radarSettings.ShowPerformanceDiagnostics)
+                        Console.WriteLine($"perf: terrain loaded {result.Data?.Width ?? 0}x{result.Data?.Height ?? 0} in {result.ElapsedMs:F1}ms");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_radarSettings.ShowPerformanceDiagnostics)
+                    Console.WriteLine($"perf: terrain load failed: {ex.Message}");
+            }
+        }
+
+        if (_landmarkLoadTask is { IsCompleted: true } landmarkTask)
+        {
+            _landmarkLoadTask = null;
+            try
+            {
+                var result = landmarkTask.GetAwaiter().GetResult();
+                if (result.Area == areaInstance)
+                {
+                    _landmarksLoadedArea = areaInstance;
+                    _landmarks = result.Data;
+                    if (_radarSettings.ShowPerformanceDiagnostics)
+                        Console.WriteLine($"perf: landmarks loaded {result.Data.Length} in {result.ElapsedMs:F1}ms");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (_radarSettings.ShowPerformanceDiagnostics)
+                    Console.WriteLine($"perf: landmark load failed: {ex.Message}");
+            }
+        }
+
+        if (_terrainLoadedArea != areaInstance && _terrainLoadTask is null)
+            BeginStaticAreaLoads(areaInstance);
+        if (_landmarksLoadedArea != areaInstance && _landmarkLoadTask is null)
+            BeginStaticAreaLoads(areaInstance);
+    }
+
+    private void TrackPerformance(long tickStarted, double renderMs)
+    {
+        if (!_radarSettings.ShowPerformanceDiagnostics)
+        {
+            _perfWindowStarted = Stopwatch.GetTimestamp();
+            _perfFrameCount = 0;
+            _perfTickTotalMs = _perfTickMaxMs = 0;
+            _perfRenderTotalMs = _perfRenderMaxMs = 0;
+            _perfDrawTotalMs = _perfDrawMaxMs = 0;
+            _perfEndDrawTotalMs = _perfEndDrawMaxMs = 0;
+            _perfPresentTotalMs = _perfPresentMaxMs = 0;
+            _perfFogTotalMs = _perfFogMaxMs = 0;
+            return;
+        }
+
+        var tickMs = Stopwatch.GetElapsedTime(tickStarted).TotalMilliseconds;
+        _perfFrameCount++;
+        _perfTickTotalMs += tickMs;
+        _perfTickMaxMs = Math.Max(_perfTickMaxMs, tickMs);
+        _perfRenderTotalMs += renderMs;
+        _perfRenderMaxMs = Math.Max(_perfRenderMaxMs, renderMs);
+        _perfDrawTotalMs += _renderer.LastDrawMs;
+        _perfDrawMaxMs = Math.Max(_perfDrawMaxMs, _renderer.LastDrawMs);
+        _perfEndDrawTotalMs += _renderer.LastEndDrawMs;
+        _perfEndDrawMaxMs = Math.Max(_perfEndDrawMaxMs, _renderer.LastEndDrawMs);
+        _perfPresentTotalMs += _renderer.LastPresentMs;
+        _perfPresentMaxMs = Math.Max(_perfPresentMaxMs, _renderer.LastPresentMs);
+        _perfFogTotalMs += _renderer.LastFogMs;
+        _perfFogMaxMs = Math.Max(_perfFogMaxMs, _renderer.LastFogMs);
+
+        var elapsed = Stopwatch.GetElapsedTime(_perfWindowStarted);
+        if (elapsed.TotalSeconds < 5 || _perfFrameCount == 0) return;
+
+        Console.WriteLine(
+            $"perf: fps={_perfFrameCount / elapsed.TotalSeconds:F1} " +
+            $"tick={_perfTickTotalMs / _perfFrameCount:F2}/{_perfTickMaxMs:F2}ms " +
+            $"render={_perfRenderTotalMs / _perfFrameCount:F2}/{_perfRenderMaxMs:F2}ms " +
+            $"draw={_perfDrawTotalMs / _perfFrameCount:F2}/{_perfDrawMaxMs:F2}ms " +
+            $"end={_perfEndDrawTotalMs / _perfFrameCount:F2}/{_perfEndDrawMaxMs:F2}ms " +
+            $"present={_perfPresentTotalMs / _perfFrameCount:F2}/{_perfPresentMaxMs:F2}ms " +
+            $"fog={_perfFogTotalMs / _perfFrameCount:F2}/{_perfFogMaxMs:F2}ms " +
+            $"fogCells={_renderer.LastFogRects}/{_renderer.LastFogSamples} " +
+            $"entities={_live.LastReturnedEntityCount} " +
+            $"entityScan={_live.LastEntityScanMs:F2}ms awake={_live.LastAwakeMapSize} " +
+            $"sleepScan={_live.LastSleepingScanMs:F2}ms sleeping={_live.LastSleepingMapSize}");
+
+        _perfWindowStarted = Stopwatch.GetTimestamp();
+        _perfFrameCount = 0;
+        _perfTickTotalMs = _perfTickMaxMs = 0;
+        _perfRenderTotalMs = _perfRenderMaxMs = 0;
+        _perfDrawTotalMs = _perfDrawMaxMs = 0;
+        _perfEndDrawTotalMs = _perfEndDrawMaxMs = 0;
+        _perfPresentTotalMs = _perfPresentMaxMs = 0;
+        _perfFogTotalMs = _perfFogMaxMs = 0;
     }
 
     private List<AtlasMark> BuildAtlasMarks(IReadOnlyList<Poe2Atlas.AtlasNodeLive> nodes)
@@ -661,7 +867,7 @@ public sealed class RadarApp : IDisposable
             var closestDist = float.MaxValue;
             foreach (var e in _entities)
             {
-                if (!e.IsAlive && e.HpMax > 0) continue;
+                if (e.Category == Poe2Live.EntityCategory.Monster && !e.IsAlive) continue;
                 if (!e.Metadata.Contains(targetPattern, StringComparison.OrdinalIgnoreCase)) continue;
                 var d = (e.Grid - playerGrid).Length();
                 if (d < closestDist) { closestDist = d; closest = e; }
@@ -718,12 +924,13 @@ public sealed class RadarApp : IDisposable
         }
         if (DateTime.UtcNow < _nextKeyAt) return;
         var changed = true;
+        var manualOffset = Down(0x11); // Ctrl keeps calibration available without fighting PoE map panning.
         if (Down(0x21)) _radarSettings.ScaleMul *= 1.03f;
         else if (Down(0x22)) _radarSettings.ScaleMul /= 1.03f;
-        else if (Down(0x25)) _radarSettings.OffsetX -= 4;
-        else if (Down(0x27)) _radarSettings.OffsetX += 4;
-        else if (Down(0x26)) _radarSettings.OffsetY -= 4;
-        else if (Down(0x28)) _radarSettings.OffsetY += 4;
+        else if (manualOffset && Down(0x25)) _radarSettings.OffsetX -= 4;
+        else if (manualOffset && Down(0x27)) _radarSettings.OffsetX += 4;
+        else if (manualOffset && Down(0x26)) _radarSettings.OffsetY -= 4;
+        else if (manualOffset && Down(0x28)) _radarSettings.OffsetY += 4;
         else if (Down(0x24)) { _radarSettings.ScaleMul = 1f; _radarSettings.OffsetX = 0; _radarSettings.OffsetY = 0; }
         else changed = false;
         if (changed)
