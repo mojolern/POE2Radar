@@ -28,7 +28,7 @@ public sealed class Poe2Live
     private readonly Dictionary<nint, EntityCategory> _category = new();
     private readonly Dictionary<nint, string> _meta = new();
     private readonly Dictionary<nint, string[]> _mods = new();
-    private readonly Dictionary<nint, (Rarity Rarity, string? Art, bool Identified)> _itemIdent = new();
+    private readonly Dictionary<nint, (Rarity Rarity, string? Art, string? Name, bool Identified)> _itemIdent = new();
     private readonly Dictionary<nint, nint> _iconAddr = new();     // entity → MinimapIcon component (0 = none); game POI
     private readonly Dictionary<nint, uint> _idAt = new();         // entity address → last-seen std::map key id (recycle guard)
     private readonly Dictionary<nint, long> _lifeRetryAt = new();
@@ -101,7 +101,7 @@ public sealed class Poe2Live
         bool IsBoss = false, bool IsTargetable = true, bool IsLocked = false, bool IsLarge = false,
         float Scale = 1f, int BaseSpeed = -1, LeagueMechanic League = LeagueMechanic.None,
         bool IconComplete = false, bool IsSleeping = false, bool IsMechanicAnchor = false,
-        IReadOnlyList<string>? Mods = null, string? ItemArt = null, bool ItemIdentified = true)
+        IReadOnlyList<string>? Mods = null, string? ItemArt = null, string? ItemName = null, bool ItemIdentified = true)
     {
         public bool IsAlive => LifeState is EntityLifeState.NotApplicable or EntityLifeState.Alive;
         public bool IsDead => LifeState == EntityLifeState.Dead;
@@ -411,10 +411,11 @@ public sealed class Poe2Live
             var metadata = _meta.GetValueOrDefault(entity, "");
             var mods = cat == EntityCategory.Monster ? ReadMods(entity) : null;
             string? itemArt = null;
+            string? itemName = null;
             var itemIdentified = true;
             if (cat == EntityCategory.Other &&
                 metadata.Contains("WorldItem", StringComparison.Ordinal))
-                (rarity, itemArt, itemIdentified) = ReadItemIdentity(entity);
+                (rarity, itemArt, itemName, itemIdentified) = ReadItemIdentity(entity);
             var league = DetectLeague(metadata);
             var (poi, iconCompleteNow) = ReadIcon(entity);
             var likelyEssence = _essenceAnchorIds.Contains(id) ||
@@ -466,7 +467,7 @@ public sealed class Poe2Live
                 poi, ReadReaction(entity), rarity, opened,
                 isBoss, isTargetable, isLocked, isLarge, scale, baseSpeed, league, iconComplete,
                 IsSleeping: false, IsMechanicAnchor: mechanicAnchor,
-                Mods: mods, ItemArt: itemArt, ItemIdentified: itemIdentified);
+                Mods: mods, ItemArt: itemArt, ItemName: itemName, ItemIdentified: itemIdentified);
             dots.Add(dot);
             liveIds.Add(id);
 
@@ -786,16 +787,16 @@ public sealed class Poe2Live
         return result.Length == 0 ? null : result;
     }
 
-    private (Rarity Rarity, string? Art, bool Identified) ReadItemIdentity(nint entity)
+    private (Rarity Rarity, string? Art, string? Name, bool Identified) ReadItemIdentity(nint entity)
     {
         if (_itemIdent.TryGetValue(entity, out var cached)) return cached;
-        if (_itemReadBudget <= 0) return (Rarity.NonMonster, null, true);
+        if (_itemReadBudget <= 0) return (Rarity.NonMonster, null, null, true);
 
         var worldItem = ResolveComponent(entity, "WorldItem");
         var item = worldItem == 0 ? 0 : Ptr(worldItem + Poe2.WorldItemComponent.ItemEntity);
         if (item == 0)
         {
-            var empty = (Rarity.NonMonster, (string?)null, true);
+            var empty = (Rarity.NonMonster, (string?)null, (string?)null, true);
             _itemIdent[entity] = empty;
             return empty;
         }
@@ -814,6 +815,7 @@ public sealed class Poe2Live
         }
 
         string? art = null;
+        string? itemName = ItemNameCandidate(ReadMetadata(item));
         var renderItem = ResolveComponent(item, "RenderItem");
         if (renderItem != 0)
         {
@@ -821,9 +823,18 @@ public sealed class Poe2Live
             if (path != 0) art = ArtBasename(_reader.ReadStringUtf16(path, 128));
         }
 
-        var result = (rarity, art, identified);
+        var result = (rarity, art, itemName, identified);
         _itemIdent[entity] = result;
         return result;
+    }
+
+    private static string? ItemNameCandidate(string metadataOrName)
+    {
+        if (string.IsNullOrWhiteSpace(metadataOrName)) return null;
+        if (!metadataOrName.StartsWith("Metadata/", StringComparison.OrdinalIgnoreCase))
+            return metadataOrName.Trim();
+        var slash = metadataOrName.LastIndexOf('/');
+        return slash >= 0 && slash < metadataOrName.Length - 1 ? metadataOrName[(slash + 1)..] : null;
     }
 
     private static string? ArtBasename(string path)

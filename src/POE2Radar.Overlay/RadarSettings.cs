@@ -140,6 +140,10 @@ public sealed class RadarSettings
     public bool HideUntargetable { get; set; } = false;
 
     // Nameplate HP bars
+    public bool ShowNormalNameplates { get; set; } = true;
+    public bool ShowMagicNameplates { get; set; } = true;
+    public bool ShowRareNameplates { get; set; } = true;
+    public bool ShowUniqueNameplates { get; set; } = true;
     public float NameplateBarWidth { get; set; } = 1.0f;
     public float NameplateBarHeight { get; set; } = 5f;
     public float NameplateOffsetY { get; set; } = -30f;
@@ -390,6 +394,17 @@ public sealed class HpBarSettings
     public float WidthMagic { get; set; } = 38f;
     public float WidthRare { get; set; } = 50f;
     public float WidthUnique { get; set; } = 64f;
+    public string NormalColor { get; set; } = "#ff3333";
+    public string MagicColor { get; set; } = "#73a6ff";
+    public string RareColor { get; set; } = "#ffd926";
+    public string UniqueColor { get; set; } = "#ff7300";
+    public string LowHealthColor { get; set; } = "#ff3333";
+    public string BackgroundColor { get; set; } = "#1a0a0a";
+    public string BorderColor { get; set; } = "#ffffff";
+    public float Opacity { get; set; } = 1f;
+    public float BackgroundOpacity { get; set; } = 0.65f;
+    public float BorderOpacity { get; set; } = 0.9f;
+    public float LowHealthThreshold { get; set; } = 0.3f;
 }
 
 public sealed class TerrainStyle

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using POE2Radar.Core.Game;
 using POE2Radar.Overlay.Automation;
+using POE2Radar.Overlay.Pricing;
 
 namespace POE2Radar.Overlay.Web;
 
@@ -155,7 +156,7 @@ public sealed class ApiServer : IDisposable
                     boss = e.IsBoss, league = e.League.ToString(), locked = e.IsLocked, large = e.IsLarge,
                     source = e.IsSleeping ? "Sleeping" : "Awake",
                     sleeping = e.IsSleeping, mechanicAnchor = e.IsMechanicAnchor, iconComplete = e.IconComplete,
-                    mods = e.ModList, itemArt = e.ItemArt, itemIdentified = e.ItemIdentified,
+                    mods = e.ModList, itemArt = e.ItemArt, itemName = e.ItemName, itemIdentified = e.ItemIdentified,
                     watched = _watched.IsWatched(e.Metadata),
                 });
                 WriteJson(ctx, list);
@@ -260,6 +261,12 @@ public sealed class ApiServer : IDisposable
 
             case "/api/prices":
                 WriteJson(ctx, _prices());
+                break;
+
+            case "/api/price-leagues":
+                if (method == "GET")
+                    WriteJson(ctx, PriceBook.GetLeagueOptionsAsync().GetAwaiter().GetResult());
+                else WriteJson(ctx, new { error = "method not allowed" }, 405);
                 break;
 
             case "/api/settings":

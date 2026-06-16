@@ -60,6 +60,9 @@ tr.watched{background:#2a3a2a}
 .setting-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;min-height:28px}
 .setting-row label{width:160px;font-size:13px;color:#ccc;flex-shrink:0}
 .setting-row .val{font-size:12px;color:#78b4ff;width:50px;text-align:right}
+.hp-rarity-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.hp-rarity-controls label{width:auto;display:flex;align-items:center;gap:6px;color:var(--ink-dim);font-size:12px}
+.hp-rarity-controls input[type=color]{width:42px;height:26px}
 .section{background:#252530;border-radius:6px;padding:10px 14px;margin-bottom:10px}
 .section h3{font-size:13px;color:#78b4ff;margin-bottom:8px}
 .settings-subtabs{position:sticky;top:0;z-index:3;display:flex;gap:4px;flex-wrap:wrap;background:#2a2a3a;padding:2px 0 10px;margin-bottom:2px}
@@ -316,7 +319,7 @@ code{color:var(--gold-bright)}
         <label>Highlight minimum (ex)<input type="number" id="priceMin" min="0" step="0.5"></label>
         <label>Unique minimum (ex)<input type="number" id="priceUniqueMin" min="0" step="0.5"></label>
         <label>Minimum stack quantity<input type="number" id="priceQty" min="1" step="1"></label>
-        <label>League override<input type="text" id="priceLeague" placeholder="Auto-detect"></label>
+        <label>League / realm<select id="priceLeague"><option value="">Auto current Softcore</option></select></label>
       </div>
       <div class="display-rule-flags" style="margin-top:8px">
         <label><input type="checkbox" class="price-cat" value="Uniques"> Uniques</label>
@@ -550,7 +553,7 @@ function showTab(name){
   if(!panel)return;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  [...document.querySelectorAll('.tab')].find(t=>t.textContent.toLowerCase().includes(name.slice(0,4))||t.getAttribute('onclick')?.includes(name))?.classList.add('active');
+  document.querySelector(`.tab[onclick="showTab('${name}')"]`)?.classList.add('active');
   panel.classList.add('active');
   try{localStorage.setItem('radarActiveTab',name)}catch{}
   if(name==='watched')refreshWatched();
@@ -767,11 +770,12 @@ function addDisplayRuleFromEntity(){
 }
 async function loadDisplayPage(){
   try{
-    const [rules,mods,radar,prices]=await Promise.all([
+    const [rules,mods,radar,prices,priceLeagues]=await Promise.all([
       fetch('/api/display-rules').then(r=>r.json()),
       fetch('/api/mods').then(r=>r.json()),
       fetch('/api/settings').then(r=>r.json()),
-      fetch('/api/prices').then(r=>r.json())
+      fetch('/api/prices').then(r=>r.json()),
+      fetch('/api/price-leagues').then(r=>r.ok?r.json():[]).catch(()=>[])
     ]);
     displayRules=Array.isArray(rules)?rules:[];
     knownMods=mods.mods||[];
@@ -783,11 +787,41 @@ async function loadDisplayPage(){
     $('priceMin').value=g.highlightMinEx??10;
     $('priceUniqueMin').value=g.uniqueMinEx??5;
     $('priceQty').value=g.minQuantity??2;
-    $('priceLeague').value=g.league||'';
+    renderPriceLeagues(priceLeagues,g.league||'',prices.league||'');
     document.querySelectorAll('.price-cat').forEach(c=>c.checked=(g.categories||[]).includes(c.value));
-    $('priceStatus').textContent=`${prices.loaded?'Loaded':'Waiting'} | ${prices.league||'auto league'} | ${prices.count||0} prices | ${prices.status||''}`;
+    $('priceStatus').textContent=formatPriceStatus(prices);
     renderDisplayRules();
   }catch(e){$('priceStatus').textContent='Unable to load display controls: '+e;}
+}
+function renderPriceLeagues(leagues,selected,active){
+  const host=$('priceLeague'); if(!host)return;
+  const opts=['<option value="">Auto current Softcore</option>'];
+  const seen=new Set(['']);
+  const list=Array.isArray(leagues)?leagues:[];
+  const add=(value,label)=>{
+    if(!value||seen.has(value))return;
+    seen.add(value);
+    opts.push(`<option value="${esc(value)}">${esc(label)}</option>`);
+  };
+  list.forEach(l=>{
+    const value=l.value||'';
+    const base=value.replace(/^HC\s+/i,'');
+    const realm=l.hardcore?'Hardcore':'Softcore';
+    add(value,`${realm} - ${base}${l.isCurrent?' (current)':''}`);
+  });
+  if(selected&&!seen.has(selected))add(selected,`Custom - ${selected}`);
+  if(active&&!seen.has(active))add(active,`Active - ${active}`);
+  host.innerHTML=opts.join('');
+  host.value=selected||'';
+}
+function formatPriceStatus(prices){
+  const loaded=prices.loaded?'Loaded':'Waiting';
+  const league=prices.league||'auto current softcore';
+  const realm=prices.hardcore?'Hardcore':'Softcore';
+  const rate=Number(prices.exPerDivine)||0;
+  const inv=Number(prices.divPerExalted)||(rate>0?1/rate:0);
+  const rateText=rate>0?` | 1 div = ${rate.toFixed(2)} ex | 1 ex = ${inv.toFixed(5)} div`:'';
+  return `${loaded} | ${realm} | ${league} | ${prices.count||0} prices${rateText} | ${prices.status||''}`;
 }
 async function saveDisplayPage(){
   const clean=displayRules.map(({_open,...r})=>r);
@@ -1006,6 +1040,17 @@ const settingsDef = [
   ]},
   {section:'Nameplate HP Bars',items:[
     {key:'showNameplates',label:'Show HP Bars',type:'bool'},
+    {type:'hpRarity',label:'Normal Monsters',toggle:'showNormalNameplates',color:'hpBars.normalColor'},
+    {type:'hpRarity',label:'Magic Monsters',toggle:'showMagicNameplates',color:'hpBars.magicColor'},
+    {type:'hpRarity',label:'Rare Monsters',toggle:'showRareNameplates',color:'hpBars.rareColor'},
+    {type:'hpRarity',label:'Unique Monsters',toggle:'showUniqueNameplates',color:'hpBars.uniqueColor'},
+    {key:'hpBars.lowHealthColor',label:'Low HP Color',type:'color'},
+    {key:'hpBars.backgroundColor',label:'Background Color',type:'color'},
+    {key:'hpBars.borderColor',label:'Border Color',type:'color'},
+    {key:'hpBars.opacity',label:'Bar Opacity',type:'num',min:0,max:1,step:0.05},
+    {key:'hpBars.backgroundOpacity',label:'Background Opacity',type:'num',min:0,max:1,step:0.05},
+    {key:'hpBars.borderOpacity',label:'Border Opacity',type:'num',min:0,max:1,step:0.05},
+    {key:'hpBars.lowHealthThreshold',label:'Low HP Threshold',type:'num',min:0.05,max:0.95,step:0.05},
     {key:'nameplateBarWidth',label:'Bar Width Scale',type:'num',min:0.3,max:3,step:0.1},
     {key:'nameplateBarHeight',label:'Bar Height (px)',type:'num',min:1,max:20,step:1},
     {key:'nameplateOffsetY',label:'Y Offset (negative = above)',type:'num',min:-100,max:50,step:1},
@@ -1049,7 +1094,17 @@ const atlasSettingsDef = [
 ];
 
 function renderSettingItem(item){
-  const v=settings[item.key]??'';
+  if(item.type==='hpRarity'){
+    const enabled=getSettingValue(item.toggle);
+    const color=getSettingValue(item.color);
+    return `<div class="setting-row"><label>${item.label}</label>
+      <div class="hp-rarity-controls">
+        <label><input type="checkbox" ${enabled?'checked':''} onchange="setSetting('${item.toggle}',this.checked)"> Enabled</label>
+        <input type="color" value="${color||'#ffffff'}" title="${item.label} HP bar color" onchange="setSetting('${item.color}',this.value)">
+      </div>
+    </div>`;
+  }
+  const v=getSettingValue(item.key);
   let html=`<div class="setting-row"><label>${item.label}</label>`;
   if(item.type==='bool')
     html+=`<input type="checkbox" ${v?'checked':''} onchange="setSetting('${item.key}',this.checked)">`;
@@ -1069,13 +1124,13 @@ function renderSettingItem(item){
 function syncNumberSetting(key,value,box){
   const n=parseFloat(value);
   if(Number.isNaN(n))return;
-  settings[key]=n;
+  setSettingValue(key,n);
   if(box)box.value=value;
 }
 function syncRangeSetting(key,value,range){
   const n=parseFloat(value);
   if(Number.isNaN(n))return;
-  settings[key]=n;
+  setSettingValue(key,n);
   if(range)range.value=value;
 }
 
@@ -1098,9 +1153,17 @@ async function loadSettings(){
     const sid='sec_'+sec.section.replace(/[^a-zA-Z]/g,'');
     html+=`<div class="section"><h3 style="cursor:pointer;user-select:none" onclick="document.getElementById('${sid}').style.display=document.getElementById('${sid}').style.display==='none'?'':'none'">${collapsed?'▶':'▼'} ${sec.section}</h3><div id="${sid}" style="${collapsed?'display:none':''}">`;
     for(const item of sec.items){
-      const v=settings[item.key]??'';
+      const v=item.type==='hpRarity'?'':getSettingValue(item.key);
       html+=`<div class="setting-row"><label>${item.label}</label>`;
-      if(item.type==='bool')
+      if(item.type==='hpRarity'){
+        const enabled=getSettingValue(item.toggle);
+        const color=getSettingValue(item.color);
+        html+=`<div class="hp-rarity-controls">
+          <label><input type="checkbox" ${enabled?'checked':''} onchange="setSetting('${item.toggle}',this.checked)"> Enabled</label>
+          <input type="color" value="${color||'#ffffff'}" title="${item.label} HP bar color" onchange="setSetting('${item.color}',this.value)">
+        </div>`;
+      }
+      else if(item.type==='bool')
         html+=`<input type="checkbox" ${v?'checked':''} onchange="setSetting('${item.key}',this.checked)">`;
       else if(item.type==='color')
         html+=`<input type="color" value="${v}" onchange="setSetting('${item.key}',this.value)">`;
@@ -1129,7 +1192,7 @@ const settingsGroups=[
   {id:'performance',label:'Performance'},
 ];
 function settingsGroupFor(section){
-  if(section.includes('Dot Sizes')||section.includes('Outline')||section.includes('Font Sizes')||section.includes('Colors'))return 'appearance';
+  if(section.includes('Dot Sizes')||section.includes('Outline')||section.includes('Font Sizes')||section.includes('Colors')||section.includes('Nameplate'))return 'appearance';
   if(section.includes('Terrain / Map Outline')||section.includes('Calibration')||section.includes('Exploration Fog')||section.includes('Map Drawing'))return 'map';
   if(section.includes('Pathfinding')||section.includes('Auto-Flask')||section.includes('Auto-Logout'))return 'automation';
   if(section.includes('Performance'))return 'performance';
@@ -1150,7 +1213,21 @@ function showSettingsGroup(group){
     button.classList.toggle('active',button.dataset.settingsGroup===group)
   );
 }
-function setSetting(key,val){settings[key]=val;}
+function getSettingValue(key){
+  if(!key.includes('.'))return settings[key]??'';
+  return key.split('.').reduce((obj,part)=>obj&&obj[part]!==undefined?obj[part]:undefined,settings)??'';
+}
+function setSettingValue(key,val){
+  const parts=key.split('.');
+  let obj=settings;
+  for(let i=0;i<parts.length-1;i++){
+    const part=parts[i];
+    if(!obj[part]||typeof obj[part]!=='object')obj[part]={};
+    obj=obj[part];
+  }
+  obj[parts[parts.length-1]]=val;
+}
+function setSetting(key,val){setSettingValue(key,val);}
 const iconShapeOptions=['Circle','Square','Diamond','Triangle','TriangleDown','Star','Plus','Cross','Hexagon','Pentagon','Exclamation','Ring','Shield','Gem','Droplet','Heart','ArrowUp'];
 function renderMechanicStyles(){
   const styles=settings.styles||(settings.styles={});

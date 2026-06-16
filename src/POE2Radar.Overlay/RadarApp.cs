@@ -498,7 +498,7 @@ public sealed class RadarApp : IDisposable
         foreach (var entity in entities)
         {
             if (string.IsNullOrWhiteSpace(entity.ItemArt)) continue;
-            var price = _priceBook.TryByArt(entity.ItemArt);
+            var price = _priceBook.TryByArtAndName(entity.ItemArt, entity.ItemName);
             if (price is not { } value || value.LowConfidence(settings.MinQuantity)) continue;
             var group = PriceCategoryGroup(value.Category);
             if (!categories.Contains(group)) continue;
@@ -506,8 +506,8 @@ public sealed class RadarApp : IDisposable
             result.Add(new ItemLabel(
                 entity.World,
                 value.Name,
-                _priceBook.Format(value.Exalted),
-                value.Exalted >= settings.HighlightMinEx,
+                _priceBook.Format(value),
+                value.HighExalted >= settings.HighlightMinEx,
                 entity.Rarity == Poe2Live.Rarity.Unique && !entity.ItemIdentified));
         }
         return result;
@@ -520,7 +520,11 @@ public sealed class RadarApp : IDisposable
         count = _priceBook.ItemCount,
         status = _priceBook.Status,
         exPerDivine = _priceBook.ExPerDivine,
+        divPerExalted = _priceBook.DivPerExalted,
         exPerChaos = _priceBook.ExPerChaos,
+        primaryCurrency = _priceBook.PrimaryCurrency,
+        secondaryCurrency = _priceBook.SecondaryCurrency,
+        hardcore = _priceBook.Hardcore,
         lastFetchUtc = _priceBook.LastFetchUtc,
     };
 

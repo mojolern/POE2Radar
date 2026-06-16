@@ -12,7 +12,14 @@ namespace POE2Radar.Overlay.Pricing;
 public readonly record struct PriceResult(string Name, double Exalted, int Quantity, string Category)
 {
     public bool LowConfidence(int minQty) => Quantity < minQty;
+    public double MinExalted { get; init; }
+    public double MaxExalted { get; init; }
+    public bool IsRange => MinExalted > 0 && MaxExalted > 0 && Math.Abs(MaxExalted - MinExalted) > 0.01;
+    public double LowExalted => MinExalted > 0 ? MinExalted : Exalted;
+    public double HighExalted => MaxExalted > 0 ? MaxExalted : Exalted;
 }
+
+public sealed record PriceLeagueInfo(string Value, bool IsCurrent, bool Hardcore);
 
 /// <summary>
 /// Centralized price source, ported in spirit from the user's PoE1 NinjaPriceService and built around
@@ -71,23 +78,31 @@ public sealed class PriceBook
 
     // Atomically-swapped snapshots (volatile; lock-free reads on the tick/render thread).
     private volatile Dictionary<string, PricedItem> _byArt = new(StringComparer.OrdinalIgnoreCase);
+    private volatile Dictionary<string, PriceRange> _byArtRange = new(StringComparer.OrdinalIgnoreCase);
     private volatile Dictionary<string, PricedItem> _byName = new(StringComparer.OrdinalIgnoreCase);
 
     private volatile bool _fetching;
     private DateTime _lastFetchUtc = DateTime.MinValue;
     private string _league = "";
     private string? _leagueOverride;
+    private static IReadOnlyList<PriceLeagueInfo>? s_leagueOptions;
+    private static DateTime s_leagueOptionsFetchedUtc = DateTime.MinValue;
 
     public double ExPerDivine { get; private set; } = 1;
     public double ExPerChaos { get; private set; } = 1;
+    public double DivPerExalted => ExPerDivine > 0 ? 1.0 / ExPerDivine : 0;
     public bool IsLoaded => _byName.Count > 0 || _byArt.Count > 0;
     public int ItemCount => _byArt.Count + _byName.Count;
     public string League => _league;
+    public bool Hardcore => _league.StartsWith("HC ", StringComparison.OrdinalIgnoreCase);
+    public string PrimaryCurrency { get; private set; } = "divine";
+    public string SecondaryCurrency { get; private set; } = "exalted";
     public string Status { get; private set; } = "not started";
     public DateTime LastFetchUtc => _lastFetchUtc;
     public int RefreshIntervalMinutes { get; set; } = 30;
 
     private sealed record PricedItem(string Name, double Exalted, int Quantity, string Category);
+    private sealed record PriceRange(string Name, double MinExalted, double MaxExalted, int Quantity, string Category);
 
     public PriceBook(string cachePath, string? leagueOverride = null)
     {
@@ -132,8 +147,22 @@ public sealed class PriceBook
     public PriceResult? TryByArt(string? artBasename)
     {
         if (string.IsNullOrWhiteSpace(artBasename)) return null;
-        return _byArt.TryGetValue(artBasename.Trim(), out var p)
+        var art = artBasename.Trim();
+        if (_byArtRange.TryGetValue(art, out var r))
+            return new PriceResult(r.Name, r.MaxExalted, r.Quantity, r.Category)
+            {
+                MinExalted = r.MinExalted,
+                MaxExalted = r.MaxExalted,
+            };
+        return _byArt.TryGetValue(art, out var p)
             ? new PriceResult(p.Name, p.Exalted, p.Quantity, p.Category) : null;
+    }
+
+    public PriceResult? TryByArtAndName(string? artBasename, string? itemName)
+    {
+        var byName = TryByName(CleanItemLabel(itemName));
+        if (byName is { } exact) return exact;
+        return TryByArt(artBasename);
     }
 
     /// <summary>Look up any priced item (unique or currency) by display name.</summary>
@@ -151,6 +180,46 @@ public sealed class PriceBook
         return $"{ex:0.##} ex";
     }
 
+    public string Format(PriceResult result)
+    {
+        if (!result.IsRange) return Format(result.Exalted);
+        return $"{Format(result.LowExalted)}-{Format(result.HighExalted)}";
+    }
+
+    public double DivineToExalted(double divine) => DivineToExalted(divine, ExPerDivine);
+    public double ExaltedToDivine(double exalted) => ExPerDivine > 0 ? exalted / ExPerDivine : 0;
+
+    public static async Task<IReadOnlyList<PriceLeagueInfo>> GetLeagueOptionsAsync()
+    {
+        if (s_leagueOptions is { Count: > 0 } cached &&
+            DateTime.UtcNow - s_leagueOptionsFetchedUtc < TimeSpan.FromMinutes(30))
+            return cached;
+
+        try
+        {
+            var json = await Http.GetStringAsync("https://poe2scout.com/api/poe2/Leagues").ConfigureAwait(false);
+            var leagues = JsonSerializer.Deserialize<List<ScoutLeague>>(json, Json) ?? new();
+            var options = leagues
+                .Where(l => !string.IsNullOrWhiteSpace(l.Value))
+                .Select(l => new PriceLeagueInfo(
+                    l.Value.Trim(),
+                    l.IsCurrent,
+                    l.Value.StartsWith("HC", StringComparison.OrdinalIgnoreCase)))
+                .DistinctBy(l => l.Value, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(l => l.IsCurrent)
+                .ThenBy(l => l.Hardcore)
+                .ThenBy(l => l.Value, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            s_leagueOptions = options;
+            s_leagueOptionsFetchedUtc = DateTime.UtcNow;
+            return options;
+        }
+        catch
+        {
+            return s_leagueOptions ?? Array.Empty<PriceLeagueInfo>();
+        }
+    }
+
     // ── fetch ────────────────────────────────────────────────────────────────
 
     private async Task FetchAsync()
@@ -163,6 +232,7 @@ public sealed class PriceBook
             var lg = Uri.EscapeDataString(league);
 
             var byArt = new Dictionary<string, PricedItem>(StringComparer.OrdinalIgnoreCase);
+            var byArtFamilies = new Dictionary<string, List<PricedItem>>(StringComparer.OrdinalIgnoreCase);
             var byName = new Dictionary<string, PricedItem>(StringComparer.OrdinalIgnoreCase);
 
             // Rates default to "not yet known"; the first overview response that carries core.rates sets
@@ -170,17 +240,18 @@ public sealed class PriceBook
             double exPerDivine = 0;
 
             foreach (var type in ExchangeTypes)
-                await FetchExchangeAsync(lg, type, byArt, byName, () => exPerDivine, r => exPerDivine = r).ConfigureAwait(false);
+                await FetchExchangeAsync(lg, type, byArt, byArtFamilies, byName, () => exPerDivine, r => exPerDivine = r).ConfigureAwait(false);
             foreach (var type in UniqueTypes)
                 await FetchUniquesAsync(lg, type, byArt, byName, () => exPerDivine, r => exPerDivine = r).ConfigureAwait(false);
 
             if (byArt.Count == 0 && byName.Count == 0) { Status = "fetch returned no rows"; return; }
 
             _byArt = byArt;
+            _byArtRange = BuildTieredRanges(byArtFamilies);
             _byName = byName;
             _league = league;
             _lastFetchUtc = DateTime.UtcNow;
-            Status = $"loaded {byName.Count} by name + {byArt.Count} by art for '{league}'";
+            Status = $"loaded {byName.Count} by name + {byArt.Count} by art + {_byArtRange.Count} ranges for '{league}'";
             SaveCache();
         }
         catch (Exception ex) { Status = $"fetch failed: {ex.Message}"; }
@@ -194,9 +265,8 @@ public sealed class PriceBook
         if (_leagueOverride != null) return _leagueOverride;
         try
         {
-            var json = await Http.GetStringAsync("https://poe2scout.com/api/poe2/Leagues").ConfigureAwait(false);
-            var leagues = JsonSerializer.Deserialize<List<ScoutLeague>>(json, Json) ?? new();
-            var pick = leagues.FirstOrDefault(l => l.IsCurrent && !l.Value.StartsWith("HC", StringComparison.OrdinalIgnoreCase))
+            var leagues = await GetLeagueOptionsAsync().ConfigureAwait(false);
+            var pick = leagues.FirstOrDefault(l => l.IsCurrent && !l.Hardcore)
                        ?? leagues.FirstOrDefault(l => l.IsCurrent)
                        ?? leagues.FirstOrDefault();
             return pick?.Value ?? "";
@@ -209,6 +279,8 @@ public sealed class PriceBook
     private void ApplyRates(NinjaCore? core)
     {
         if (core?.Rates == null) return;
+        if (!string.IsNullOrWhiteSpace(core.Primary)) PrimaryCurrency = core.Primary.Trim();
+        if (!string.IsNullOrWhiteSpace(core.Secondary)) SecondaryCurrency = core.Secondary.Trim();
         if (core.Rates.TryGetValue("exalted", out var exPerDiv) && exPerDiv > 0)
         {
             ExPerDivine = exPerDiv;
@@ -218,7 +290,9 @@ public sealed class PriceBook
     }
 
     private async Task FetchExchangeAsync(string leagueEscaped, string type,
-        Dictionary<string, PricedItem> byArt, Dictionary<string, PricedItem> byName,
+        Dictionary<string, PricedItem> byArt,
+        Dictionary<string, List<PricedItem>> byArtFamilies,
+        Dictionary<string, PricedItem> byName,
         Func<double> getRate, Action<double> setRate)
     {
         try
@@ -242,12 +316,16 @@ public sealed class PriceBook
                 var id = ln.Id.GetString();
                 if (string.IsNullOrEmpty(id) || !meta.TryGetValue(id, out var m)) continue;
                 if (string.IsNullOrWhiteSpace(m.Name) || ln.PrimaryValue <= 0) continue;
-                var ex = ln.PrimaryValue * rate;
+                var ex = DivineToExalted(ln.PrimaryValue, rate);
                 var qty = (int)Math.Clamp(ln.VolumePrimaryValue ?? 0, 0, int.MaxValue);
                 var item = new PricedItem(m.Name.Trim(), ex, qty, type);
                 Upsert(byName, Normalize(m.Name), item);
                 var art = ArtBasenameFromIcon(m.Image);
-                if (art != null) Upsert(byArt, art, item);
+                if (art != null)
+                {
+                    UpsertExchangeArt(byArt, art, item);
+                    AddExchangeArtFamily(byArtFamilies, art, item);
+                }
             }
         }
         catch { /* a missing/empty category is fine — skip it */ }
@@ -269,7 +347,7 @@ public sealed class PriceBook
             foreach (var ln in data.Lines)
             {
                 if (string.IsNullOrWhiteSpace(ln.Name) || ln.PrimaryValue <= 0) continue;
-                var ex = ln.PrimaryValue * rate;
+                var ex = DivineToExalted(ln.PrimaryValue, rate);
                 var item = new PricedItem(ln.Name.Trim(), ex, ln.ListingCount ?? 0, type);
                 Upsert(byName, Normalize(ln.Name), item);
                 var art = ArtBasenameFromIcon(ln.Icon);
@@ -280,6 +358,76 @@ public sealed class PriceBook
     }
 
     // Keep the higher-value listing on a key collision (shared art across variants → show the best).
+    private static double DivineToExalted(double divine, double exPerDivine) => divine * exPerDivine;
+
+    private static void UpsertExchangeArt(Dictionary<string, PricedItem> map, string key, PricedItem item)
+    {
+        if (IsSharedTieredCurrencyArt(item)) return;
+        Upsert(map, key, item);
+    }
+
+    private static bool IsSharedTieredCurrencyArt(PricedItem item) =>
+        item.Category.Equals("Currency", StringComparison.OrdinalIgnoreCase) &&
+        IsTieredVariantName(item.Name);
+
+    private static void AddExchangeArtFamily(Dictionary<string, List<PricedItem>> map, string key, PricedItem item)
+    {
+        if (string.IsNullOrEmpty(key)) return;
+        if (!map.TryGetValue(key, out var list))
+        {
+            list = new List<PricedItem>();
+            map[key] = list;
+        }
+        list.Add(item);
+    }
+
+    private static Dictionary<string, PriceRange> BuildTieredRanges(Dictionary<string, List<PricedItem>> families)
+    {
+        var result = new Dictionary<string, PriceRange>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (art, items) in families)
+        {
+            var range = items
+                .Where(i => i.Category.Equals("Currency", StringComparison.OrdinalIgnoreCase))
+                .GroupBy(i => TierFamilyName(i.Name), StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1 && g.Any(i => IsTieredVariantName(i.Name)))
+                .Select(g =>
+                {
+                    var variants = g
+                        .GroupBy(i => Normalize(i.Name), StringComparer.OrdinalIgnoreCase)
+                        .Select(g2 => g2.OrderByDescending(i => i.Quantity).First())
+                        .OrderBy(i => i.Exalted)
+                        .ToArray();
+                    return variants.Length < 2
+                        ? null
+                        : new PriceRange(
+                            $"{g.Key} variants",
+                            variants.First().Exalted,
+                            variants.Last().Exalted,
+                            variants.Max(i => i.Quantity),
+                            variants.First().Category);
+                })
+                .Where(r => r != null)
+                .OrderByDescending(r => r!.MaxExalted - r.MinExalted)
+                .FirstOrDefault();
+
+            if (range != null) result[art] = range;
+        }
+        return result;
+    }
+
+    private static bool IsTieredVariantName(string name) =>
+        name.StartsWith("Lesser ", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("Greater ", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("Perfect ", StringComparison.OrdinalIgnoreCase);
+
+    private static string TierFamilyName(string name)
+    {
+        foreach (var prefix in new[] { "Lesser ", "Greater ", "Perfect " })
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                return name[prefix.Length..].Trim();
+        return name.Trim();
+    }
+
     private static void Upsert(Dictionary<string, PricedItem> map, string key, PricedItem item)
     {
         if (string.IsNullOrEmpty(key)) return;
@@ -301,6 +449,16 @@ public sealed class PriceBook
 
     private static string Normalize(string s) => s.Trim();
 
+    private static string? CleanItemLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var s = value.Trim();
+        var x = s.IndexOf('x');
+        if (x > 0 && int.TryParse(s[..x].Trim(), out _))
+            s = s[(x + 1)..].Trim();
+        return s;
+    }
+
     // ── disk cache ─────────────────────────────────────────────────────────────
 
     private sealed class CacheDto
@@ -309,7 +467,10 @@ public sealed class PriceBook
         public DateTime FetchedUtc { get; set; }
         public double ExPerDivine { get; set; }
         public double ExPerChaos { get; set; }
+        public string PrimaryCurrency { get; set; } = "divine";
+        public string SecondaryCurrency { get; set; } = "exalted";
         public Dictionary<string, PricedItem> ByArt { get; set; } = new();
+        public Dictionary<string, PriceRange> ByArtRanges { get; set; } = new();
         public Dictionary<string, PricedItem> ByName { get; set; } = new();
     }
 
@@ -322,13 +483,33 @@ public sealed class PriceBook
             if (dto == null) return;
             // Honor a configured league: a cache for a different league shouldn't be used.
             if (_leagueOverride != null && !string.Equals(dto.League, _leagueOverride, StringComparison.OrdinalIgnoreCase)) return;
-            _byArt = new Dictionary<string, PricedItem>(dto.ByArt, StringComparer.OrdinalIgnoreCase);
+            var byArt = new Dictionary<string, PricedItem>(dto.ByArt, StringComparer.OrdinalIgnoreCase);
+            var removedStaleCurrencyArt = false;
+            foreach (var key in byArt.Where(kv => IsSharedTieredCurrencyArt(kv.Value)).Select(kv => kv.Key).ToArray())
+            {
+                byArt.Remove(key);
+                removedStaleCurrencyArt = true;
+            }
+            _byArt = byArt;
+            _byArtRange = new Dictionary<string, PriceRange>(dto.ByArtRanges ?? new(), StringComparer.OrdinalIgnoreCase);
             _byName = new Dictionary<string, PricedItem>(dto.ByName, StringComparer.OrdinalIgnoreCase);
             _league = dto.League;
             _lastFetchUtc = dto.FetchedUtc;
             if (dto.ExPerDivine > 0) ExPerDivine = dto.ExPerDivine;
             if (dto.ExPerChaos > 0) ExPerChaos = dto.ExPerChaos;
-            Status = $"cache: {ItemCount} entries for '{_league}'";
+            if (!string.IsNullOrWhiteSpace(dto.PrimaryCurrency)) PrimaryCurrency = dto.PrimaryCurrency;
+            if (!string.IsNullOrWhiteSpace(dto.SecondaryCurrency)) SecondaryCurrency = dto.SecondaryCurrency;
+            if (removedStaleCurrencyArt)
+            {
+                _lastFetchUtc = DateTime.MinValue;
+                Status = $"cache: {ItemCount} entries for '{_league}'; refreshing stale currency art";
+            }
+            else if (_byArtRange.Count == 0)
+            {
+                _lastFetchUtc = DateTime.MinValue;
+                Status = $"cache: {ItemCount} entries for '{_league}'; refreshing tiered price ranges";
+            }
+            else Status = $"cache: {ItemCount} entries for '{_league}'";
         }
         catch (Exception ex) { Status = $"cache load failed: {ex.Message}"; }
     }
@@ -342,7 +523,8 @@ public sealed class PriceBook
             var dto = new CacheDto
             {
                 League = _league, FetchedUtc = _lastFetchUtc, ExPerDivine = ExPerDivine, ExPerChaos = ExPerChaos,
-                ByArt = new(_byArt), ByName = new(_byName),
+                PrimaryCurrency = PrimaryCurrency, SecondaryCurrency = SecondaryCurrency,
+                ByArt = new(_byArt), ByArtRanges = new(_byArtRange), ByName = new(_byName),
             };
             File.WriteAllText(_cachePath, JsonSerializer.Serialize(dto, Json));
         }

@@ -70,6 +70,7 @@ public sealed class OverlayRenderer : IDisposable
     private ID2D1SolidColorBrush? _bPlayer, _bMonster, _bNpc, _bChest, _bTrans, _bObject, _bOther, _bText, _bPanel, _bLandmark;
     private ID2D1SolidColorBrush? _bMagic, _bRare, _bUnique;
     private ID2D1SolidColorBrush? _bCheatOn, _bCheatOff, _bCheatMiss, _bFog, _bRing, _bOutline, _bFriendly;
+    private ID2D1SolidColorBrush? _bHpFill, _bHpLow, _bHpBack, _bHpBorder;
     private ID2D1SolidColorBrush? _bStyle; // scratch brush recolored per-draw for config-driven icons
     private IDWriteTextFormat? _tf;
     private IDWriteTextFormat? _tfLandmark, _tfTransition, _tfChest, _tfStatus, _tfAtlas;
@@ -116,6 +117,10 @@ public sealed class OverlayRenderer : IDisposable
         _bCheatMiss = rt.CreateSolidColorBrush(ColCheatMiss);
         _bOutline = rt.CreateSolidColorBrush(new Color4(0f, 0f, 0f, 0.8f));
         _bFriendly = rt.CreateSolidColorBrush(new Color4(0.2f, 0.9f, 0.3f, 0.9f));
+        _bHpFill = rt.CreateSolidColorBrush(ColMonster);
+        _bHpLow = rt.CreateSolidColorBrush(ColMonster);
+        _bHpBack = rt.CreateSolidColorBrush(ColPanel);
+        _bHpBorder = rt.CreateSolidColorBrush(ColText);
         _bStyle = rt.CreateSolidColorBrush(ColText);
         _tf = _window.DWriteFactory.CreateTextFormat("Consolas", null, FontWeight.Normal, Vortice.DirectWrite.FontStyle.Normal, FontStretch.Normal, 12f, "en-us");
         _ready = true;
@@ -371,7 +376,8 @@ public sealed class OverlayRenderer : IDisposable
         foreach (var e in ctx.Entities)
         {
             if (e.Category != Poe2Live.EntityCategory.Monster || !e.IsAlive || e.HpMax <= 0) continue;
-            if (e.Rarity is Poe2Live.Rarity.Normal or Poe2Live.Rarity.NonMonster) continue; // Magic/Rare/Unique only
+            var rs2 = ctx.Radar;
+            if (!ShouldDrawNameplateForRarity(e.Rarity, rs2)) continue;
 
             var w = e.World;
             var cw = w.X*m[3] + w.Y*m[7] + w.Z*m[11] + m[15];
@@ -382,7 +388,6 @@ public sealed class OverlayRenderer : IDisposable
             var sy = (0.5f - cy/cw/2f) * H;
             if (sx < 0 || sx > W || sy < 0 || sy > H) continue;
 
-            var rs2 = ctx.Radar;
             var hpBars = rs2?.HpBars;
             var npScale = rs2?.NameplateBarWidth ?? 1.0f;
             var bw = e.Rarity switch
@@ -391,24 +396,43 @@ public sealed class OverlayRenderer : IDisposable
                 Poe2Live.Rarity.Rare   => (hpBars?.WidthRare ?? 50f) * npScale,
                 _                      => (hpBars?.WidthMagic ?? 38f) * npScale,
             };
-            var styles2 = rs2?.Styles;
-            var barStyle = e.Rarity switch
-            {
-                Poe2Live.Rarity.Unique => styles2?.MonsterUnique,
-                Poe2Live.Rarity.Rare   => styles2?.MonsterRare,
-                _                      => styles2?.MonsterMagic,
-            };
-            SetStyleBrush(barStyle?.Color ?? "#FF7300", barStyle?.Opacity ?? 1f);
-            var col = _bStyle!;
+            SetBrush(_bHpFill!, BarColorForRarity(e.Rarity, hpBars), hpBars?.Opacity ?? 1f);
+            SetBrush(_bHpBorder!, hpBars?.BorderColor ?? "#ffffff", hpBars?.BorderOpacity ?? 0.9f);
+            SetBrush(_bHpBack!, hpBars?.BackgroundColor ?? "#1a0a0a", hpBars?.BackgroundOpacity ?? 0.65f);
+            SetBrush(_bHpLow!, hpBars?.LowHealthColor ?? "#ff3333", hpBars?.Opacity ?? 1f);
             var bh = hpBars?.Height ?? rs2?.NameplateBarHeight ?? 5f;
             var bx = sx - bw / 2f + (hpBars?.OffsetX ?? 0f);
             var by = sy + (hpBars?.OffsetY ?? rs2?.NameplateOffsetY ?? -30f);
             var frac = e.HpFraction;
-            rt.FillRectangle(new Vortice.RawRectF(bx, by, bx + bw, by + bh), _bPanel!);
-            var fill = frac < 0.3f ? _bMonster! : col;
-            rt.FillRectangle(new Vortice.RawRectF(bx, by, bx + bw * frac, by + bh), fill);
-            rt.DrawRectangle(new Vortice.RawRectF(bx, by, bx + bw, by + bh), col, 1f);
+            var lowThreshold = Math.Clamp(hpBars?.LowHealthThreshold ?? 0.3f, 0f, 1f);
+            rt.FillRectangle(new Vortice.RawRectF(bx, by, bx + bw, by + bh), _bHpBack!);
+            rt.FillRectangle(new Vortice.RawRectF(bx, by, bx + bw * frac, by + bh), frac < lowThreshold ? _bHpLow! : _bHpFill!);
+            rt.DrawRectangle(new Vortice.RawRectF(bx, by, bx + bw, by + bh), _bHpBorder!, 1f);
         }
+    }
+
+    private static string BarColorForRarity(Poe2Live.Rarity rarity, HpBarSettings? hpBars)
+    {
+        return rarity switch
+            {
+                Poe2Live.Rarity.Unique => hpBars?.UniqueColor ?? "#ff7300",
+                Poe2Live.Rarity.Rare => hpBars?.RareColor ?? "#ffd926",
+                Poe2Live.Rarity.Magic => hpBars?.MagicColor ?? "#73a6ff",
+                Poe2Live.Rarity.Normal => hpBars?.NormalColor ?? "#ff3333",
+                _ => "#ffffff",
+            };
+    }
+
+    private static bool ShouldDrawNameplateForRarity(Poe2Live.Rarity rarity, RadarSettings? settings)
+    {
+        return rarity switch
+        {
+            Poe2Live.Rarity.Normal => settings?.ShowNormalNameplates ?? true,
+            Poe2Live.Rarity.Magic => settings?.ShowMagicNameplates ?? true,
+            Poe2Live.Rarity.Rare => settings?.ShowRareNameplates ?? true,
+            Poe2Live.Rarity.Unique => settings?.ShowUniqueNameplates ?? true,
+            _ => false,
+        };
     }
 
     private void DrawItemLabels(ID2D1RenderTarget rt, RenderContext ctx)
@@ -834,6 +858,12 @@ public sealed class OverlayRenderer : IDisposable
         if (_bStyle == null) return;
         ParseHex(hexColor, out var r, out var g, out var b);
         _bStyle.Color = new Color4(r / 255f, g / 255f, b / 255f, opacity);
+    }
+
+    private static void SetBrush(ID2D1SolidColorBrush brush, string hexColor, float opacity)
+    {
+        ParseHex(hexColor, out var r, out var g, out var b);
+        brush.Color = new Color4(r / 255f, g / 255f, b / 255f, Math.Clamp(opacity, 0f, 1f));
     }
 
     private MechanicStyle? MatchMechanic(RadarStyles styles, string metadata)
@@ -1708,6 +1738,7 @@ public sealed class OverlayRenderer : IDisposable
         _bTrans?.Dispose(); _bObject?.Dispose(); _bOther?.Dispose(); _bText?.Dispose(); _bPanel?.Dispose(); _bLandmark?.Dispose();
         _bMagic?.Dispose(); _bRare?.Dispose(); _bUnique?.Dispose();
         _bCheatOn?.Dispose(); _bCheatOff?.Dispose(); _bCheatMiss?.Dispose(); _bFog?.Dispose(); _bRing?.Dispose(); _bOutline?.Dispose(); _bFriendly?.Dispose();
+        _bHpFill?.Dispose(); _bHpLow?.Dispose(); _bHpBack?.Dispose(); _bHpBorder?.Dispose();
         _bStyle?.Dispose();
         foreach (var b in _leagueBrushes.Values) b?.Dispose(); _leagueBrushes.Clear();
         _geoTriangle?.Dispose(); _geoStar?.Dispose(); _geoDiamond?.Dispose(); _geoPlus?.Dispose();
