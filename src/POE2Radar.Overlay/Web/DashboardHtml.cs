@@ -152,9 +152,17 @@ body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:999;ba
 .census{display:grid;grid-template-columns:1fr 1fr;gap:7px}.census-item{border:1px solid var(--line-soft);background:var(--panel);padding:8px 9px}
 .census-item b{display:block;font-family:Georgia,serif;color:var(--gold-bright);font-size:19px;line-height:1}.census-item span{display:block;color:var(--ink-faint);font-size:8px;letter-spacing:.12em;text-transform:uppercase;margin-top:4px}
 #status{background:transparent;padding:0;margin:0;color:var(--ink-dim);font-size:11px;line-height:1.55}
+.hotkey-list{display:grid;gap:4px;margin-top:2px}
+.hotkey-item{display:grid;grid-template-columns:42px minmax(0,1fr);gap:7px;align-items:center;font-size:10px;color:var(--ink-dim);line-height:1.25}
+.hotkey-key{font-family:Consolas,"Cascadia Mono",ui-monospace,monospace;text-align:center;color:var(--gold-bright);border:1px solid var(--line);background:#0c0a07;border-radius:2px;padding:2px 4px;white-space:nowrap}
+.hotkey-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hotkey-default{display:block;color:var(--ink-faint);font-size:9px;margin-top:1px}
 .dashboard-main{display:flex;flex-direction:column;min-width:0;min-height:0}
-.dashboard-main>.tabs{flex:none;overflow-x:auto;flex-wrap:nowrap;gap:2px;margin:0;padding:13px 22px 0;border-bottom:1px solid var(--line);background:rgba(10,9,7,.45)}
-.dashboard-main>.tabs::-webkit-scrollbar{height:5px}
+.dashboard-main>.tabs{flex:none;overflow-x:auto;flex-wrap:nowrap;gap:2px;margin:0;padding:13px 22px 8px;border-bottom:1px solid var(--line);background:rgba(10,9,7,.45);scrollbar-color:var(--gold) #0c0a07;scrollbar-width:auto;box-shadow:inset -34px 0 30px -30px rgba(236,202,126,.65)}
+.dashboard-main>.tabs::-webkit-scrollbar{height:14px}
+.dashboard-main>.tabs::-webkit-scrollbar-track{background:#0c0a07;border-top:1px solid var(--line-soft)}
+.dashboard-main>.tabs::-webkit-scrollbar-thumb{background:linear-gradient(90deg,var(--gold-deep),var(--gold-bright));border:3px solid #0c0a07;border-radius:10px}
+.dashboard-main>.tabs::-webkit-scrollbar-thumb:hover{background:var(--gold-bright)}
 .dashboard-main>.tabs .tab{flex:none;font-family:Georgia,serif;font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);background:transparent;border:1px solid transparent;border-bottom:none;border-radius:3px 3px 0 0;padding:8px 13px;position:relative;top:1px}
 .dashboard-main>.tabs .tab:hover{color:var(--ink-dim)}
 .dashboard-main>.tabs .tab.active{color:var(--gold-bright);background:var(--panel);border-color:var(--line)}
@@ -226,6 +234,8 @@ code{color:var(--gold-bright)}
   </div>
   <div class="sidebar-section">Connection</div>
   <div class="status" id="status">Connecting...</div>
+  <div class="sidebar-section">Hotkeys</div>
+  <div class="hotkey-list" id="hotkeyLegend"></div>
 </aside>
 <main class="dashboard-main">
 <div class="tabs">
@@ -543,7 +553,7 @@ code{color:var(--gold-bright)}
 </div>
 
 <script>
-let entities=[],watched=[],landmarks=[],db=[],settings={},displayRules=[],knownMods=[],catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set();
+let entities=[],watched=[],landmarks=[],db=[],settings={},displayRules=[],knownMods=[],catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set(),hotkeySettingsLoading=false;
 let atlasRuleFilterTrack=false, atlasRuleFilterArrow=false;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,"\\'").replace(/"/g,'&quot;');
@@ -609,6 +619,7 @@ function updateConsoleState(s){
   $('sideMonsters').textContent=s.counts?.Monster||0;
   $('sideChests').textContent=s.counts?.Chest||0;
   $('sideNpcs').textContent=s.counts?.Npc||0;
+  ensureHotkeyLegend();
 }
 function renderEntities(){
   const search=$('search').value.toLowerCase();
@@ -790,6 +801,7 @@ async function loadDisplayPage(){
     renderPriceLeagues(priceLeagues,g.league||'',prices.league||'');
     document.querySelectorAll('.price-cat').forEach(c=>c.checked=(g.categories||[]).includes(c.value));
     $('priceStatus').textContent=formatPriceStatus(prices);
+    renderHotkeyLegend();
     renderDisplayRules();
   }catch(e){$('priceStatus').textContent='Unable to load display controls: '+e;}
 }
@@ -1147,6 +1159,7 @@ async function saveAtlasSettings(){
 
 async function loadSettings(){
   settings=await(await fetch('/api/settings')).json();
+  renderHotkeyLegend();
   let html='';
   for(const sec of settingsDef){
     const collapsed=sec.section.startsWith('Game Tweaks')||sec.section==='DevTest';
@@ -1886,6 +1899,26 @@ const VK_DISPLAY={0x70:'F1',0x71:'F2',0x72:'F3',0x73:'F4',0x74:'F5',0x75:'F6',0x
   0x6A:'Num*',0x6B:'Num+',0x6D:'Num-',0x6E:'Num.',0x6F:'Num/',
   0xBE:'.',0xBC:',',0xBA:';',0xBF:'/',0xC0:'`',0xDB:'[',0xDD:']',0xDC:'\\\\',0xDE:"'",0xBD:'-',0xBB:'='};
 function vkDisplay(code){return VK_DISPLAY[code]||('0x'+code.toString(16).toUpperCase());}
+function hotkeyLegendLabel(label){return label.replace(/^Cheat:\s*/,'').replace(/\s*\(path-to\)\s*/,'');}
+function renderHotkeyLegend(){
+  const host=$('hotkeyLegend'); if(!host)return;
+  if(!settings||!Object.keys(settings).length){host.innerHTML='<div style="color:var(--ink-faint);font-size:10px">Loading...</div>';return;}
+  host.innerHTML=keybindsDef.map(kb=>{
+    const vk=settings[kb.key]??kb.def;
+    const changed=vk!==kb.def;
+    const def=changed?`<span class="hotkey-default">Default ${vkDisplay(kb.def)}</span>`:'';
+    return `<div class="hotkey-item"><span class="hotkey-key">${vkDisplay(vk)}</span><span class="hotkey-label" title="${esc(kb.label)}">${esc(hotkeyLegendLabel(kb.label))}${def}</span></div>`;
+  }).join('');
+}
+async function ensureHotkeyLegend(){
+  if(!$('hotkeyLegend'))return;
+  if(settings&&Object.keys(settings).length){renderHotkeyLegend();return;}
+  if(hotkeySettingsLoading)return;
+  hotkeySettingsLoading=true;
+  try{settings=await(await fetch('/api/settings')).json();renderHotkeyLegend();}
+  catch{$('hotkeyLegend').innerHTML='<div style="color:var(--blood-bright);font-size:10px">Unable to load keys</div>';}
+  finally{hotkeySettingsLoading=false;}
+}
 function loadKeybinds(){
   if(!settings||!Object.keys(settings).length)return;
   let html='';
@@ -1917,10 +1950,12 @@ function captureKey(e,settingKey){
   const el=$('kb_'+settingKey);
   el.value=vkDisplay(vk);
   el.style.borderColor='#5f5';
+  renderHotkeyLegend();
   setTimeout(()=>{el.style.borderColor='#555';el.blur();loadKeybinds();},300);
 }
 async function saveKeybinds(){
   await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});
+  renderHotkeyLegend();
   $('kbSavedMsg').classList.add('show');setTimeout(()=>$('kbSavedMsg').classList.remove('show'),1500);
 }
 
@@ -1928,7 +1963,7 @@ try{
   const savedTab=localStorage.getItem('radarActiveTab');
   if(savedTab&&$('tab-'+savedTab))showTab(savedTab);
 }catch{}
-refresh();refreshWatched();setInterval(refresh,2000);setInterval(inspAutoTick,2000);
+ensureHotkeyLegend();refresh();refreshWatched();setInterval(refresh,2000);setInterval(inspAutoTick,2000);
 </script></body></html>
 """;
 }

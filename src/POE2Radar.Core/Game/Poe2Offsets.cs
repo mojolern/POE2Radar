@@ -209,6 +209,51 @@ public static class Poe2
     {
         public const int Rarity = 0x94;
         public const int Identified = 0x90;
+        public const int ImplicitMods = 0xA0;
+        public const int ExplicitMods = 0xB8;
+        public const int EnchantMods = 0xD0;
+        public const int ModArrayStride = 0x40;
+        public const int ModRecordPtr = 0x28;
+        public const int ModRecordIdPtr = 0x00;
+    }
+
+    public static class StackComponent
+    {
+        public const int Count = 0x18;
+    }
+
+    public static class ServerData
+    {
+        public const int PlayerServerDataVec = 0x48;
+        public const int PlayerInventoriesVec = 0x320;
+        public const int InvArrayStride = 0x18;
+        public const int InvArrayId = 0x00;
+        public const int InvArrayPtr = 0x08;
+    }
+
+    public static class Inventory
+    {
+        public const int TotalBoxesX = 0x150;
+        public const int TotalBoxesY = 0x154;
+        public const int ItemListVec = 0x170;
+        public const int ServerRequestCounter = 0x1E8;
+    }
+
+    public static class InventoryItem
+    {
+        public const int Item = 0x00;
+        public const int SlotStartX = 0x08;
+        public const int SlotStartY = 0x0C;
+        public const int SlotEndX = 0x10;
+        public const int SlotEndY = 0x14;
+    }
+
+    public static class StatsComponent
+    {
+        public const int StatArrayStride = 0x08;
+        public const int ItemLocalStatsVec = 0x20;
+        public const int StatsChangedByItemsPtr = 0x160;
+        public const int StatsStructStatsVec = 0xF8;
     }
 
     /// <summary>Chest component. ✓ validated live (opened chest = 0, closed = 1 at +0x168).
@@ -302,6 +347,8 @@ public static class Poe2
     /// <summary>Sockets component. Internal struct — not exposed via .ot scripts.</summary>
     public static class SocketsComponent
     {
+        public const int Owner = 0x08;
+        public const int SocketedItems = 0x30;
         public const int SocketSlotsBegin = 0x30; // (IDA) StdVector of socket slot pointers
         public const int SocketSlotsEnd   = 0x38; // (IDA)
         public const int LinkedGroupBegin = 0x60; // (IDA) link group data
@@ -424,5 +471,31 @@ public static class Poe2
         public const int LocalRect      = 0x280; // float4; local element bounds, e.g. node icon 40x40.
         public const int PanelClient    = 0x330; // float4; panel client/display bounds candidate.
         public const int PanelClip      = 0x340; // float4; Atlas content clip rect, usually 16,26 -> 2544,1574.
+    }
+
+    public static class AtlasMapRow
+    {
+        public const int WorldAreaName = 0x08;
+    }
+
+    public static class AtlasNode
+    {
+        public const int MapNodeId = 0x300;
+        public const int Content = 0x310;
+        public const int State = 0x32C;
+        public const int Biome = 0x32E;
+        public const int Flags = 0x32F;
+        public const int GridPos = 0x320;
+        public const int Completion = 0x339;
+        public const int ContentVec = 0x350;
+    }
+
+    public static class AtlasGraph
+    {
+        public const int ConnectionsVec = 0x5A8;
+        public const int EdgeStride = 20;
+        public const int EdgeSourceOff = 0x04;
+        public const int EdgeTargetOff = 0x0C;
+        public const int CurrentMarkerNodePtr = 0x300;
     }
 }

@@ -28,7 +28,7 @@ public sealed class Poe2Live
     private readonly Dictionary<nint, EntityCategory> _category = new();
     private readonly Dictionary<nint, string> _meta = new();
     private readonly Dictionary<nint, string[]> _mods = new();
-    private readonly Dictionary<nint, (Rarity Rarity, string? Art, string? Name, bool Identified)> _itemIdent = new();
+    private readonly Dictionary<nint, (Rarity Rarity, string? Art, string? Name, bool Identified, string[] Mods, int StackCount)> _itemIdent = new();
     private readonly Dictionary<nint, nint> _iconAddr = new();     // entity → MinimapIcon component (0 = none); game POI
     private readonly Dictionary<nint, uint> _idAt = new();         // entity address → last-seen std::map key id (recycle guard)
     private readonly Dictionary<nint, long> _lifeRetryAt = new();
@@ -101,7 +101,8 @@ public sealed class Poe2Live
         bool IsBoss = false, bool IsTargetable = true, bool IsLocked = false, bool IsLarge = false,
         float Scale = 1f, int BaseSpeed = -1, LeagueMechanic League = LeagueMechanic.None,
         bool IconComplete = false, bool IsSleeping = false, bool IsMechanicAnchor = false,
-        IReadOnlyList<string>? Mods = null, string? ItemArt = null, string? ItemName = null, bool ItemIdentified = true)
+        IReadOnlyList<string>? Mods = null, string? ItemArt = null, string? ItemName = null,
+        bool ItemIdentified = true, IReadOnlyList<string>? ItemMods = null, int ItemStackCount = 1)
     {
         public bool IsAlive => LifeState is EntityLifeState.NotApplicable or EntityLifeState.Alive;
         public bool IsDead => LifeState == EntityLifeState.Dead;
@@ -112,6 +113,7 @@ public sealed class Poe2Live
         public bool IsImmobile => BaseSpeed == 0;
         public bool IsLeagueMechanic => League != LeagueMechanic.None;
         public IReadOnlyList<string> ModList => Mods ?? Array.Empty<string>();
+        public IReadOnlyList<string> ItemModList => ItemMods ?? Array.Empty<string>();
     }
 
     public readonly record struct MapUi(bool IsVisible, float ShiftX, float ShiftY, float Zoom);
@@ -413,9 +415,11 @@ public sealed class Poe2Live
             string? itemArt = null;
             string? itemName = null;
             var itemIdentified = true;
+            IReadOnlyList<string>? itemMods = null;
+            var itemStackCount = 1;
             if (cat == EntityCategory.Other &&
                 metadata.Contains("WorldItem", StringComparison.Ordinal))
-                (rarity, itemArt, itemName, itemIdentified) = ReadItemIdentity(entity);
+                (rarity, itemArt, itemName, itemIdentified, itemMods, itemStackCount) = ReadItemIdentity(entity);
             var league = DetectLeague(metadata);
             var (poi, iconCompleteNow) = ReadIcon(entity);
             var likelyEssence = _essenceAnchorIds.Contains(id) ||
@@ -467,7 +471,8 @@ public sealed class Poe2Live
                 poi, ReadReaction(entity), rarity, opened,
                 isBoss, isTargetable, isLocked, isLarge, scale, baseSpeed, league, iconComplete,
                 IsSleeping: false, IsMechanicAnchor: mechanicAnchor,
-                Mods: mods, ItemArt: itemArt, ItemName: itemName, ItemIdentified: itemIdentified);
+                Mods: mods, ItemArt: itemArt, ItemName: itemName,
+                ItemIdentified: itemIdentified, ItemMods: itemMods, ItemStackCount: itemStackCount);
             dots.Add(dot);
             liveIds.Add(id);
 
@@ -787,16 +792,16 @@ public sealed class Poe2Live
         return result.Length == 0 ? null : result;
     }
 
-    private (Rarity Rarity, string? Art, string? Name, bool Identified) ReadItemIdentity(nint entity)
+    private (Rarity Rarity, string? Art, string? Name, bool Identified, string[] Mods, int StackCount) ReadItemIdentity(nint entity)
     {
         if (_itemIdent.TryGetValue(entity, out var cached)) return cached;
-        if (_itemReadBudget <= 0) return (Rarity.NonMonster, null, null, true);
+        if (_itemReadBudget <= 0) return (Rarity.NonMonster, null, null, true, Array.Empty<string>(), 1);
 
         var worldItem = ResolveComponent(entity, "WorldItem");
         var item = worldItem == 0 ? 0 : Ptr(worldItem + Poe2.WorldItemComponent.ItemEntity);
         if (item == 0)
         {
-            var empty = (Rarity.NonMonster, (string?)null, (string?)null, true);
+            var empty = (Rarity.NonMonster, (string?)null, (string?)null, true, Array.Empty<string>(), 1);
             _itemIdent[entity] = empty;
             return empty;
         }
@@ -813,6 +818,7 @@ public sealed class Poe2Live
             if (_reader.TryReadStruct<int>(mods + Poe2.ModsComponent.Identified, out var id))
                 identified = id != 0;
         }
+        var itemMods = mods == 0 ? Array.Empty<string>() : ReadItemModText(mods);
 
         string? art = null;
         string? itemName = ItemNameCandidate(ReadMetadata(item));
@@ -822,10 +828,78 @@ public sealed class Poe2Live
             var path = Ptr(renderItem + Poe2.RenderItemComponent.ResourcePath);
             if (path != 0) art = ArtBasename(_reader.ReadStringUtf16(path, 128));
         }
+        var stackCount = ReadItemStackCount(item);
 
-        var result = (rarity, art, itemName, identified);
+        var result = (rarity, art, itemName, identified, itemMods, stackCount);
         _itemIdent[entity] = result;
         return result;
+    }
+
+    private int ReadItemStackCount(nint item)
+    {
+        var stack = ResolveComponent(item, "Stack");
+        if (stack == 0) return 1;
+        return _reader.TryReadStruct<int>(stack + Poe2.StackComponent.Count, out var count) &&
+               count is > 0 and < 100000
+            ? count
+            : 1;
+    }
+
+    private string[] ReadItemModText(nint modsComponent)
+    {
+        var result = new List<string>(8);
+        ReadItemModVector(modsComponent + Poe2.ModsComponent.ImplicitMods, "implicit", result);
+        ReadItemModVector(modsComponent + Poe2.ModsComponent.ExplicitMods, "explicit", result);
+        ReadItemModVector(modsComponent + Poe2.ModsComponent.EnchantMods, "enchant", result);
+        return result.Count == 0 ? Array.Empty<string>() : result.ToArray();
+    }
+
+    private void ReadItemModVector(nint vectorAddress, string kind, List<string> output)
+    {
+        if (!_reader.TryReadStruct<StdVector>(vectorAddress, out var vector)) return;
+        var bytes = (long)vector.Last - (long)vector.First;
+        if (vector.First == 0 || bytes <= 0 ||
+            bytes % Poe2.ModsComponent.ModArrayStride != 0 ||
+            bytes > 0x800)
+            return;
+
+        var count = (int)(bytes / Poe2.ModsComponent.ModArrayStride);
+        for (var i = 0; i < count; i++)
+        {
+            var modArray = vector.First + (nint)(i * Poe2.ModsComponent.ModArrayStride);
+            var row = Ptr(modArray + Poe2.ModsComponent.ModRecordPtr);
+            var id = ReadItemModId(row);
+            if (!LooksLikeModId(id)) continue;
+
+            var values = ReadItemModValues(modArray);
+            var text = string.Join("; ", ItemModTranslator.Shared.RenderMod(id, values));
+            output.Add($"{kind}: {text}");
+        }
+    }
+
+    private List<int> ReadItemModValues(nint modArray)
+    {
+        var values = new List<int>(4);
+        if (_reader.TryReadStruct<StdVector>(modArray, out var vector))
+        {
+            var bytes = (long)vector.Last - (long)vector.First;
+            var count = vector.First == 0 || bytes <= 0 ? 0 : bytes / sizeof(int);
+            for (long i = 0; i < Math.Min(count, 8); i++)
+                if (_reader.TryReadStruct<int>(vector.First + (nint)(i * sizeof(int)), out var value))
+                    values.Add(value);
+        }
+
+        if (values.Count == 0 &&
+            _reader.TryReadStruct<int>(modArray + 0x18, out var fallback))
+            values.Add(fallback);
+
+        return values;
+    }
+
+    private string ReadItemModId(nint modsDatRow)
+    {
+        var ptr = Ptr(modsDatRow + Poe2.ModsComponent.ModRecordIdPtr);
+        return ptr == 0 ? "" : _reader.ReadStringUtf16(ptr, 80);
     }
 
     private static string? ItemNameCandidate(string metadataOrName)

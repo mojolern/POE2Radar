@@ -52,15 +52,16 @@ public sealed class PriceBook
 {
     // poe.ninja "stash item" unique types (icon → art basename + price inline per line).
     private static readonly string[] UniqueTypes =
-        { "UniqueWeapons", "UniqueArmours", "UniqueAccessories", "UniqueFlasks", "UniqueJewels", "UniqueTablets" };
+        { "UniqueWeapons", "UniqueArmours", "UniqueAccessories", "UniqueFlasks", "UniqueJewels",
+          "UniqueTablets", "PrecursorTablets" };
 
     // poe.ninja "exchange" currency-like types. Superset of the old poe2scout set — includes
     // SoulCores (poe2scout's "ultimatum"), UncutGems (Uncut Skill/Spirit/Support Gem by level) and
     // LineageSupportGems (named, tradeable). NOTE: individual CUT active skill gems (e.g. "Rain of
     // Blades") are not a traded market on poe.ninja or anywhere — only UncutGems carry a value.
     private static readonly string[] ExchangeTypes =
-        { "Currency", "Runes", "Fragments", "Essences", "Expedition", "Breach", "Ritual", "Delirium",
-          "UncutGems", "Abyss", "SoulCores", "LineageSupportGems", "Idols" };
+        { "Currency", "Runes", "Fragments", "Essences", "Expedition", "Verisium", "Breach", "Ritual",
+          "Delirium", "UncutGems", "Abyss", "SoulCores", "LineageSupportGems", "Idols" };
 
     private const string NinjaExchange = "https://poe.ninja/poe2/api/economy/exchange/current/overview";
     private const string NinjaStashItem = "https://poe.ninja/poe2/api/economy/stash/current/item/overview";
@@ -146,9 +147,14 @@ public sealed class PriceBook
     /// <summary>Look up a unique by its 2D-art basename (e.g. "Earthbound") — the in-game item read key.</summary>
     public PriceResult? TryByArt(string? artBasename)
     {
+        return TryByArt(artBasename, allowRange: true);
+    }
+
+    private PriceResult? TryByArt(string? artBasename, bool allowRange)
+    {
         if (string.IsNullOrWhiteSpace(artBasename)) return null;
         var art = artBasename.Trim();
-        if (_byArtRange.TryGetValue(art, out var r))
+        if (allowRange && _byArtRange.TryGetValue(art, out var r))
             return new PriceResult(r.Name, r.MaxExalted, r.Quantity, r.Category)
             {
                 MinExalted = r.MinExalted,
@@ -160,9 +166,14 @@ public sealed class PriceBook
 
     public PriceResult? TryByArtAndName(string? artBasename, string? itemName)
     {
-        var byName = TryByName(CleanItemLabel(itemName));
+        var cleanName = CleanItemLabel(itemName);
+        var byName = TryByName(cleanName);
         if (byName is { } exact) return exact;
-        return TryByArt(artBasename);
+
+        // Shared 2D art is common. Only use a tiered price range when the
+        // item name itself looks like a tiered variant family.
+        var allowRange = string.IsNullOrWhiteSpace(cleanName) || IsTieredVariantName(cleanName);
+        return TryByArt(artBasename, allowRange);
     }
 
     /// <summary>Look up any priced item (unique or currency) by display name.</summary>
@@ -386,8 +397,15 @@ public sealed class PriceBook
         var result = new Dictionary<string, PriceRange>(StringComparer.OrdinalIgnoreCase);
         foreach (var (art, items) in families)
         {
-            var range = items
+            var currencyItems = items
                 .Where(i => i.Category.Equals("Currency", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (currencyItems.Length == 0 ||
+                !currencyItems.Any(i => IsTieredVariantName(i.Name)) ||
+                currencyItems.Any(i => !IsTieredVariantName(i.Name)))
+                continue;
+
+            var range = currencyItems
                 .GroupBy(i => TierFamilyName(i.Name), StringComparer.OrdinalIgnoreCase)
                 .Where(g => g.Count() > 1 && g.Any(i => IsTieredVariantName(i.Name)))
                 .Select(g =>
@@ -447,13 +465,24 @@ public sealed class PriceBook
         return name.Length >= 2 ? name : null;
     }
 
-    private static string Normalize(string s) => s.Trim();
+    private static string Normalize(string s)
+    {
+        var cleaned = s.Trim()
+            .Replace('\u00A0', ' ')
+            .Replace('\u2018', '\'')
+            .Replace('\u2019', '\'')
+            .Replace('\u201B', '\'')
+            .Replace('\u2032', '\'');
+        return string.Join(' ', cleaned.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
 
     private static string? CleanItemLabel(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         var s = value.Trim();
         var x = s.IndexOf('x');
+        var times = s.IndexOf('×');
+        if (times > 0 && (x < 0 || times < x)) x = times;
         if (x > 0 && int.TryParse(s[..x].Trim(), out _))
             s = s[(x + 1)..].Trim();
         return s;

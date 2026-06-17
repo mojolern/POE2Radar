@@ -115,6 +115,9 @@ public sealed class RadarApp : IDisposable
     private List<Poe2Atlas.AtlasNodeLive> _atlasNodes = new();
     private readonly object _atlasLock = new();
     private readonly HashSet<string> _atlasPinned = new(StringComparer.Ordinal);
+    private (int X, int Y)? _atlasStartGrid;
+    private (int X, int Y)? _atlasGoalGrid;
+    private ((int X, int Y) Start, (int X, int Y) Goal)? _loggedAtlasRoute;
     private List<AtlasMark> _atlasMarks = new();
     private IReadOnlyList<ItemLabel> _itemLabels = Array.Empty<ItemLabel>();
     private IReadOnlyList<RuneLabel> _runeLabels = Array.Empty<RuneLabel>();
@@ -138,6 +141,9 @@ public sealed class RadarApp : IDisposable
         IReadOnlyList<RuneLabel> RuneLabels,
         IReadOnlyList<Poe2Atlas.AtlasNodeLive> AtlasNodes,
         IReadOnlyList<AtlasMark> AtlasMarks,
+        NumVec2? AtlasRouteStart,
+        NumVec2? AtlasRouteEnd,
+        IReadOnlyList<NumVec2> AtlasRoute,
         string? AtlasLoadingText,
         float AtlasLoadingProgress)
     {
@@ -147,7 +153,8 @@ public sealed class RadarApp : IDisposable
             Array.Empty<Poe2Live.Landmark>(),
             null, "", null, 0, false, false, 0, null, null,
             Array.Empty<ItemLabel>(), Array.Empty<RuneLabel>(),
-            Array.Empty<Poe2Atlas.AtlasNodeLive>(), Array.Empty<AtlasMark>(), null, 0);
+            Array.Empty<Poe2Atlas.AtlasNodeLive>(), Array.Empty<AtlasMark>(),
+            null, null, Array.Empty<NumVec2>(), null, 0);
     }
 
     private DateTime _nextCheatKeyAt = DateTime.MinValue;
@@ -178,7 +185,8 @@ public sealed class RadarApp : IDisposable
         _cheats = new CheatManager(process, reader);
         Console.WriteLine("\nScanning cheat patterns...");
         _cheats.ScanAndResolve();
-        Console.WriteLine("Hotkeys: F1-F5 cheats, F8 flask, F9 settings, F10 overlay, F11 web dashboard\n");
+        Console.WriteLine("Hotkeys: F1-F5 cheats, F8 flask, F9 settings, F10 overlay / Atlas tile, F11 web dashboard\n");
+        Console.WriteLine("         F10 with Atlas open = dump hovered map/content/biome and set route START -> END; third press resets\n");
         _window = OverlayWindow.Create();
         _renderer = new OverlayRenderer(_window);
         var configDir = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "config");
@@ -348,6 +356,7 @@ public sealed class RadarApp : IDisposable
             _atlasNodes = new();
             _atlasMarks = new();
         }
+        var (atlasRouteStart, atlasRouteEnd, atlasRoute) = BuildAtlasRoute(_atlasNodes);
 
         _entities = _live.Entities(areaInstance, _radarSettings.ShowPreloadedMechanicLocations);
         _modCatalog.Observe(_entities);
@@ -376,6 +385,9 @@ public sealed class RadarApp : IDisposable
             _runeLabels,
             _atlasNodes,
             _atlasMarks,
+            atlasRouteStart,
+            atlasRouteEnd,
+            atlasRoute,
             _radarSettings.ShowAtlasNodes && _atlas.LastPanelOpen && _atlas.LoadProgress is > 0f and < 1f
                 ? _atlas.LoadStatus
                 : null,
@@ -425,6 +437,9 @@ public sealed class RadarApp : IDisposable
         var runeLabels = worldFresh ? snap.RuneLabels : Array.Empty<RuneLabel>();
         var atlasNodes = worldFresh ? snap.AtlasNodes : Array.Empty<Poe2Atlas.AtlasNodeLive>();
         var atlasMarks = worldFresh ? snap.AtlasMarks : Array.Empty<AtlasMark>();
+        var atlasRouteStart = worldFresh ? snap.AtlasRouteStart : null;
+        var atlasRouteEnd = worldFresh ? snap.AtlasRouteEnd : null;
+        var atlasRoute = worldFresh ? snap.AtlasRoute : Array.Empty<NumVec2>();
 
         var minimap = _renderLive.GameMinimap;
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player, snap.Entities, snap.Landmarks,
@@ -479,6 +494,9 @@ public sealed class RadarApp : IDisposable
             RuneLabels: runeLabels,
             AtlasNodes: atlasNodes,
             AtlasMarks: atlasMarks,
+            AtlasRouteStart: atlasRouteStart,
+            AtlasRouteEnd: atlasRouteEnd,
+            AtlasRoute: atlasRoute,
             AtlasLoadingText: worldFresh ? snap.AtlasLoadingText : null,
             AtlasLoadingProgress: worldFresh ? snap.AtlasLoadingProgress : 0);
         var renderStarted = Stopwatch.GetTimestamp();
@@ -503,14 +521,24 @@ public sealed class RadarApp : IDisposable
             var group = PriceCategoryGroup(value.Category);
             if (!categories.Contains(group)) continue;
             if (entity.Rarity == Poe2Live.Rarity.Unique && value.Exalted < settings.UniqueMinEx) continue;
+            var stackCount = Math.Max(1, entity.ItemStackCount);
+            var highExalted = value.HighExalted * stackCount;
             result.Add(new ItemLabel(
                 entity.World,
                 value.Name,
-                _priceBook.Format(value),
-                value.HighExalted >= settings.HighlightMinEx,
+                FormatStackedPrice(value, stackCount),
+                highExalted >= settings.HighlightMinEx,
                 entity.Rarity == Poe2Live.Rarity.Unique && !entity.ItemIdentified));
         }
         return result;
+    }
+
+    private string FormatStackedPrice(PriceResult value, int stackCount)
+    {
+        stackCount = Math.Max(1, stackCount);
+        if (stackCount == 1) return _priceBook.Format(value);
+        if (!value.IsRange) return _priceBook.Format(value.Exalted * stackCount);
+        return $"{_priceBook.Format(value.LowExalted * stackCount)}-{_priceBook.Format(value.HighExalted * stackCount)}";
     }
 
     private object GetPriceStatus() => new
@@ -739,6 +767,171 @@ public sealed class RadarApp : IDisposable
         return marks;
     }
 
+    private (NumVec2? Start, NumVec2? End, IReadOnlyList<NumVec2> Route) BuildAtlasRoute(
+        IReadOnlyList<Poe2Atlas.AtlasNodeLive> nodes)
+    {
+        if (nodes.Count == 0) return (null, null, Array.Empty<NumVec2>());
+
+        HashSet<string> pinned;
+        (int X, int Y)? startGrid;
+        (int X, int Y)? manualGoalGrid;
+        lock (_atlasLock)
+        {
+            pinned = new HashSet<string>(_atlasPinned, StringComparer.Ordinal);
+            startGrid = _atlasStartGrid;
+            manualGoalGrid = _atlasGoalGrid;
+        }
+
+        Poe2Atlas.AtlasNodeLive? goalNode = null;
+        foreach (var node in nodes)
+        {
+            if (manualGoalGrid is { } manualGoal)
+            {
+                if (node.Grid != manualGoal) continue;
+            }
+            else
+            {
+                if (!pinned.Contains(AtlasNodeKey(node.Element))) continue;
+            }
+            goalNode = node;
+            break;
+        }
+        if (goalNode is not { } goal) return (null, null, Array.Empty<NumVec2>());
+
+        var gridToPos = new Dictionary<(int X, int Y), NumVec2>(nodes.Count);
+        foreach (var node in nodes)
+            gridToPos[node.Grid] = new NumVec2(node.X + node.W * 0.5f, node.Y + node.H * 0.5f);
+
+        var end = gridToPos.GetValueOrDefault(goal.Grid);
+        if (startGrid is not { } start || !gridToPos.TryGetValue(start, out var startPos))
+            return (null, end, Array.Empty<NumVec2>());
+
+        var path = _atlas.FindPath(start, goal.Grid);
+        if (_loggedAtlasRoute != (start, goal.Grid))
+        {
+            _loggedAtlasRoute = (start, goal.Grid);
+            Console.WriteLine($"[atlas route] {start}->{goal.Grid}: " +
+                (path == null
+                    ? $"NO graph path (graph has {_atlas.GraphNodeCount} nodes; start in graph={_atlas.GraphHas(start)}, goal in graph={_atlas.GraphHas(goal.Grid)})"
+                    : $"{path.Count} hops"));
+        }
+        if (path == null || path.Count == 0)
+            return (startPos, end, Array.Empty<NumVec2>());
+
+        var route = new List<NumVec2>(path.Count);
+        foreach (var hop in path)
+            if (gridToPos.TryGetValue(hop, out var pos))
+                route.Add(pos);
+
+        return (startPos, end, route);
+    }
+
+    private void AtlasRoutePick()
+    {
+        if (!GetCursorPos(out var pt))
+        {
+            Console.WriteLine("\n[atlas tile] cursor unavailable.");
+            return;
+        }
+
+        var nodes = _atlasNodes;
+        if (nodes.Count == 0)
+        {
+            Console.WriteLine("\n[atlas tile] no nodes loaded yet. Open the Atlas and wait for the node layer.");
+            return;
+        }
+
+        var (scale, offset) = AtlasProjectionForPick(nodes);
+        var curX = (pt.X - offset.X) / Math.Max(0.0001f, scale);
+        var curY = (pt.Y - offset.Y) / Math.Max(0.0001f, scale);
+
+        Poe2Atlas.AtlasNodeLive? bestIn = null;
+        Poe2Atlas.AtlasNodeLive? bestAny = null;
+        var bestInDist = double.MaxValue;
+        var bestAnyDist = double.MaxValue;
+        foreach (var node in nodes)
+        {
+            if (!float.IsFinite(node.X) || !float.IsFinite(node.Y)) continue;
+            var cx = node.X + node.W * 0.5f;
+            var cy = node.Y + node.H * 0.5f;
+            var dx = curX - cx;
+            var dy = curY - cy;
+            var dist = dx * dx + dy * dy;
+            if (dist < bestAnyDist)
+            {
+                bestAnyDist = dist;
+                bestAny = node;
+            }
+
+            var hw = Math.Max(node.W, 40f) * 0.5f;
+            var hh = Math.Max(node.H, 40f) * 0.5f;
+            if (Math.Abs(dx) <= hw && Math.Abs(dy) <= hh && dist < bestInDist)
+            {
+                bestInDist = dist;
+                bestIn = node;
+            }
+        }
+
+        if ((bestIn ?? bestAny) is not { } picked)
+        {
+            Console.WriteLine("\n[atlas tile] no tile under cursor.");
+            return;
+        }
+
+        var mapCode = AtlasRawMapCode(picked);
+        var content = picked.Tags.Count > 0 ? string.Join(", ", picked.Tags) : "(none)";
+        Console.WriteLine($"\n[atlas tile] \"{picked.MapName}\"  code={mapCode}  grid={picked.Grid}  biome={picked.Biome}");
+        Console.WriteLine($"             content: {content}");
+        Console.WriteLine($"             web-UI filters -> Map: \"{picked.MapName}\"" +
+                          (picked.Tags.Count > 0 ? $"   Content: {content}" : ""));
+
+        string stage;
+        lock (_atlasLock)
+        {
+            if (_atlasStartGrid is null)
+            {
+                _atlasStartGrid = picked.Grid;
+                _atlasGoalGrid = null;
+                stage = $"START = {picked.Grid} '{picked.MapName}'";
+            }
+            else if (_atlasGoalGrid is null)
+            {
+                _atlasGoalGrid = picked.Grid;
+                stage = $"END = {picked.Grid} '{picked.MapName}'";
+            }
+            else
+            {
+                _atlasStartGrid = null;
+                _atlasGoalGrid = null;
+                _loggedAtlasRoute = null;
+                stage = "route RESET";
+            }
+        }
+        Console.WriteLine($"[atlas route] {stage}");
+    }
+
+    private (float Scale, NumVec2 Offset) AtlasProjectionForPick(IReadOnlyList<Poe2Atlas.AtlasNodeLive> nodes)
+    {
+        var zooms = nodes.Select(n => n.Scale).Where(float.IsFinite).OrderBy(v => v).ToArray();
+        var zoom = zooms.Length == 0 ? 1f : zooms[zooms.Length / 2];
+        var scale = (_window.Height > 0 ? _window.Height / 1600f : 1080f / 1600f) * zoom;
+        if (_radarSettings.AtlasAutoAlign == false)
+            scale = _window.Height > 0 ? _window.Height / 1080f : 1f;
+        scale *= Math.Clamp(_radarSettings.AtlasScale, 0.25f, 4f);
+        return (scale, new NumVec2(_radarSettings.AtlasOffsetX, _radarSettings.AtlasOffsetY));
+    }
+
+    private static string AtlasRawMapCode(in Poe2Atlas.AtlasNodeLive node)
+    {
+        foreach (var candidate in node.MapCandidates)
+        {
+            var colon = candidate.IndexOf(':');
+            var value = colon >= 0 ? candidate[(colon + 1)..] : candidate;
+            if (value.StartsWith("Map", StringComparison.Ordinal)) return value;
+        }
+        return "";
+    }
+
     private static string? MatchAtlasRule(HashSet<string> rules, in Poe2Atlas.AtlasNodeLive node)
     {
         if (rules.Count == 0) return null;
@@ -775,6 +968,8 @@ public sealed class RadarApp : IDisposable
             open = nodes.Count > 0,
             total = nodes.Count,
             pinned = pinned.ToArray(),
+            graphNodes = _atlas.GraphNodeCount,
+            currentGrid = _atlas.CurrentNodeGrid(),
             highlightTags = _radarSettings.AtlasHighlightTags,
             arrowTags = _radarSettings.AtlasArrowTags,
             highlightColors = _radarSettings.AtlasHighlightColors,
@@ -808,6 +1003,8 @@ public sealed class RadarApp : IDisposable
                     hasContent = n.HasContent,
                     biome = n.Biome,
                     icon = n.IconType,
+                    gridX = n.GridX,
+                    gridY = n.GridY,
                     x = (int)n.X,
                     y = (int)n.Y,
                     pinned = pinned.Contains(AtlasNodeKey(n.Element)),
@@ -872,12 +1069,19 @@ public sealed class RadarApp : IDisposable
             try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("http://localhost:7777") { UseShellExecute = true }); }
             catch { }
         }
-        // F10 toggle overlay visibility
+        // F10: Atlas tile inspector/route picker while Atlas is open; otherwise toggle overlay visibility.
         if (Down(0x79) && DateTime.UtcNow >= _nextToggleAt)
         {
-            _overlayVisible = !_overlayVisible;
             _nextToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            Console.WriteLine($"\nOverlay: {(_overlayVisible ? "VISIBLE" : "HIDDEN")}");
+            if (_radarSettings.ShowAtlasNodes && _atlas.LastPanelOpen)
+            {
+                AtlasRoutePick();
+            }
+            else
+            {
+                _overlayVisible = !_overlayVisible;
+                Console.WriteLine($"\nOverlay: {(_overlayVisible ? "VISIBLE" : "HIDDEN")}");
+            }
         }
         if (Down(0x78) && DateTime.UtcNow >= _nextToggleAt) // F9
         {
@@ -1220,6 +1424,16 @@ public sealed class RadarApp : IDisposable
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct POINT
+    {
+        public readonly int X;
+        public readonly int Y;
+    }
 
     public void Dispose()
     {

@@ -547,6 +547,8 @@ public sealed class OverlayRenderer : IDisposable
 
     private void DrawAtlasNodes(ID2D1RenderTarget rt, RenderContext ctx)
     {
+        DrawAtlasRoute(rt, ctx);
+
         if (ctx.AtlasMarks is { Count: > 0 } marks)
         {
             DrawAtlasMarks(rt, ctx, marks);
@@ -560,6 +562,64 @@ public sealed class OverlayRenderer : IDisposable
         {
             DrawLiveAtlasNodes(rt, ctx, liveNodes);
             return;
+        }
+    }
+
+    private void DrawAtlasRoute(ID2D1RenderTarget rt, RenderContext ctx)
+    {
+        var start = ctx.AtlasRouteStart;
+        var end = ctx.AtlasRouteEnd;
+        var route = ctx.AtlasRoute;
+        if (start is null && end is null && (route is null || route.Count == 0)) return;
+
+        var (scale, offset) = AtlasLiveProjection(ctx, ctx.AtlasNodes ?? Array.Empty<Poe2Atlas.AtlasNodeLive>());
+        NumVec2 Project(NumVec2 p) => new(p.X * scale + offset.X, p.Y * scale + offset.Y);
+
+        var dark = new Color4(0f, 0f, 0f, 0.62f);
+        var cyan = new Color4(0.24f, 0.86f, 1f, 0.95f);
+        var green = new Color4(0.43f, 0.91f, 0.53f, 1f);
+        var gold = new Color4(0.88f, 0.70f, 0.26f, 1f);
+
+        if (route is { Count: >= 2 })
+        {
+            var points = new NumVec2[route.Count];
+            for (var i = 0; i < route.Count; i++)
+                points[i] = Project(route[i]);
+
+            _bStyle!.Color = dark;
+            for (var i = 1; i < points.Length; i++)
+                rt.DrawLine(points[i - 1], points[i], _bStyle, 7f);
+
+            _bStyle.Color = cyan;
+            for (var i = 1; i < points.Length; i++)
+                rt.DrawLine(points[i - 1], points[i], _bStyle, 3.5f);
+
+            for (var i = 1; i < points.Length - 1; i++)
+                rt.DrawEllipse(new Ellipse(points[i], 4f, 4f), _bStyle, 2f);
+        }
+        else if (start is { } s && end is { } e)
+        {
+            var a = Project(s);
+            var b = Project(e);
+            _bStyle!.Color = dark;
+            rt.DrawLine(a, b, _bStyle, 6f);
+            _bStyle.Color = gold;
+            rt.DrawLine(a, b, _bStyle, 2.5f);
+        }
+
+        if (start is { } sp)
+        {
+            var p = Project(sp);
+            _bStyle!.Color = green;
+            rt.DrawEllipse(new Ellipse(p, 8f, 8f), _bStyle, 3f);
+            rt.FillEllipse(new Ellipse(p, 3f, 3f), _bStyle);
+        }
+        if (end is { } ep)
+        {
+            var p = Project(ep);
+            _bStyle!.Color = gold;
+            rt.DrawEllipse(new Ellipse(p, 11f, 11f), _bStyle, 3f);
+            rt.DrawEllipse(new Ellipse(p, 4f, 4f), _bStyle, 2f);
         }
     }
 

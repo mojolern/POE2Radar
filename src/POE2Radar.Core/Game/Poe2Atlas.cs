@@ -26,9 +26,12 @@ public sealed class Poe2Atlas
     private readonly MemoryReader _reader;
     private readonly object _nodeLock = new();
     private readonly Dictionary<nint, ResolvedAtlasInfo> _tagCache = new();
+    private readonly Dictionary<(int, int), List<(int, int)>> _graph = new();
 
     private nint _nodeVtable;
     private nint _nodeCanvas;
+    private nint _graphCanvas;
+    private nint _currentMarker;
     private int _nodeRetry;
     private int _hiddenTicks;
 
@@ -53,11 +56,14 @@ public sealed class Poe2Atlas
         float Scale,
         bool Visible,
         int IconType,
+        int GridX,
+        int GridY,
         string MapName,
         string MapSource,
         IReadOnlyList<string> MapCandidates,
         IReadOnlyList<string> Tags)
     {
+        public (int X, int Y) Grid => (GridX, GridY);
         public bool Unlocked => (Flags & 0x01) != 0;
         public bool Visited => (Flags & 0x02) != 0;
         public bool HasContent => Content != 0 || Tags.Count > 0;
@@ -152,6 +158,8 @@ public sealed class Poe2Atlas
             _reader.TryReadStruct<float>(el + UiSizeW, out var w);
             _reader.TryReadStruct<float>(el + UiSizeH, out var h);
             _reader.TryReadStruct<float>(el + Poe2.AtlasUi.LayerZoom, out var scale);
+            _reader.TryReadStruct<int>(el + Poe2.AtlasNode.GridPos, out var gridX);
+            _reader.TryReadStruct<int>(el + Poe2.AtlasNode.GridPos + 4, out var gridY);
             _reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var uiFlags);
             var visible = ((uiFlags >> Poe2.UiElement.FlagVisibleBit) & 1) != 0;
 
@@ -190,6 +198,7 @@ public sealed class Poe2Atlas
             outNodes.Add(new AtlasNodeLive(
                 el, id, content, state, biome, flags, completion,
                 x, y, w, h, scale, visible, iconType,
+                gridX, gridY,
                 resolved.Map, resolved.MapSource, resolved.MapCandidates, resolved.Content));
         }
 
@@ -212,7 +221,129 @@ public sealed class Poe2Atlas
             LoadStatus = $"Atlas: resolving labels {resolvedCount}/{matched}";
             LoadProgress = progress;
         }
+        EnsureGraph();
         return true;
+    }
+
+    private void AddEdge((int, int) a, (int, int) b)
+    {
+        if (!_graph.TryGetValue(a, out var list))
+        {
+            list = new List<(int, int)>(4);
+            _graph[a] = list;
+        }
+        if (!list.Contains(b)) list.Add(b);
+    }
+
+    private void EnsureGraph()
+    {
+        if (_nodeCanvas == 0 || _graphCanvas == _nodeCanvas) return;
+
+        _graph.Clear();
+        _graphCanvas = _nodeCanvas;
+
+        var begin = Ptr(_nodeCanvas + Poe2.AtlasGraph.ConnectionsVec);
+        if (begin == 0 ||
+            !_reader.TryReadStruct<nint>(_nodeCanvas + Poe2.AtlasGraph.ConnectionsVec + 8, out var end))
+            return;
+
+        var bytes = (long)end - (long)begin;
+        if (bytes <= 0 || bytes % Poe2.AtlasGraph.EdgeStride != 0) return;
+        var count = (int)(bytes / Poe2.AtlasGraph.EdgeStride);
+        if (count is <= 0 or > 200000) return;
+
+        var buffer = new byte[count * Poe2.AtlasGraph.EdgeStride];
+        if (_reader.TryReadBytes(begin, buffer) < buffer.Length) return;
+
+        for (var i = 0; i < count; i++)
+        {
+            var o = i * Poe2.AtlasGraph.EdgeStride;
+            var sx = BitConverter.ToInt32(buffer, o + Poe2.AtlasGraph.EdgeSourceOff);
+            var sy = BitConverter.ToInt32(buffer, o + Poe2.AtlasGraph.EdgeSourceOff + 4);
+            var dx = BitConverter.ToInt32(buffer, o + Poe2.AtlasGraph.EdgeTargetOff);
+            var dy = BitConverter.ToInt32(buffer, o + Poe2.AtlasGraph.EdgeTargetOff + 4);
+            if (sx == dx && sy == dy) continue;
+            AddEdge((sx, sy), (dx, dy));
+            AddEdge((dx, dy), (sx, sy));
+        }
+    }
+
+    public (int X, int Y)? CurrentNodeGrid()
+    {
+        lock (_nodeLock)
+        {
+            var marker = _currentMarker;
+            if (marker == 0 || Ptr(marker + Poe2.UiElement.Self) != marker) return null;
+
+            var node = Ptr(marker + Poe2.AtlasGraph.CurrentMarkerNodePtr);
+            if (node == 0) return null;
+            if (!_reader.TryReadStruct<int>(node + Poe2.AtlasNode.GridPos, out var gx)) return null;
+            if (!_reader.TryReadStruct<int>(node + Poe2.AtlasNode.GridPos + 4, out var gy)) return null;
+            return (gx, gy);
+        }
+    }
+
+    public int GraphNodeCount
+    {
+        get { lock (_nodeLock) return _graph.Count; }
+    }
+
+    public bool GraphHas((int, int) grid)
+    {
+        lock (_nodeLock) return _graph.ContainsKey(grid);
+    }
+
+    public List<(int X, int Y)>? FindPath((int X, int Y) start, (int X, int Y) goal)
+    {
+        Dictionary<(int, int), List<(int, int)>> graph;
+        lock (_nodeLock)
+        {
+            if (!_graph.ContainsKey(start) || !_graph.ContainsKey(goal)) return null;
+            graph = new Dictionary<(int, int), List<(int, int)>>(_graph);
+        }
+
+        if (start == goal) return new List<(int X, int Y)> { start };
+
+        static float Dist((int X, int Y) a, (int X, int Y) b)
+        {
+            var dx = a.X - b.X;
+            var dy = a.Y - b.Y;
+            return MathF.Sqrt(dx * dx + dy * dy);
+        }
+
+        var cameFrom = new Dictionary<(int, int), (int, int)>();
+        var gScore = new Dictionary<(int, int), float> { [start] = 0f };
+        var open = new PriorityQueue<(int, int), float>();
+        open.Enqueue(start, Dist(start, goal));
+
+        while (open.Count > 0)
+        {
+            var current = open.Dequeue();
+            if (current == goal)
+            {
+                var path = new List<(int X, int Y)> { current };
+                while (cameFrom.TryGetValue(current, out var previous))
+                {
+                    current = previous;
+                    path.Add(current);
+                }
+                path.Reverse();
+                return path;
+            }
+
+            if (!graph.TryGetValue(current, out var neighbours)) continue;
+            var baseScore = gScore[current];
+            foreach (var neighbour in neighbours)
+            {
+                var tentative = baseScore + Dist(current, neighbour);
+                if (gScore.TryGetValue(neighbour, out var old) && tentative >= old) continue;
+                cameFrom[neighbour] = current;
+                gScore[neighbour] = tentative;
+                open.Enqueue(neighbour, tentative + Dist(neighbour, goal));
+            }
+        }
+
+        return null;
     }
 
     private sealed record ResolvedAtlasInfo(string Map, string[] Content, string MapSource, string[] MapCandidates);
@@ -296,15 +427,21 @@ public sealed class Poe2Atlas
 
         var w = Ptr(mapRow);
         var code = w != 0 ? _reader.ReadStringUtf16(w, 80) : "";
+        var localizedName = "";
         if (!code.StartsWith("Map", StringComparison.Ordinal))
         {
             var w2 = Ptr(w);
             code = w2 != 0 ? _reader.ReadStringUtf16(w2, 80) : code;
+            var namePtr = w == 0 ? 0 : Ptr(w + Poe2.AtlasMapRow.WorldAreaName);
+            localizedName = namePtr == 0 ? "" : _reader.ReadStringUtf16(namePtr, 80);
         }
         if (code.StartsWith("Map", StringComparison.Ordinal))
         {
-            var display = FriendlyMapName(code);
-            return (display, display.Equals(Prettify(code), StringComparison.Ordinal) ? "map-code" : "area-table", [code, display]);
+            var display = LooksLikeName(localizedName) ? localizedName.Trim() : FriendlyMapName(code);
+            var source = LooksLikeName(localizedName)
+                ? "world-area-name"
+                : display.Equals(Prettify(code), StringComparison.Ordinal) ? "map-code" : "area-table";
+            return (display, source, [code, display]);
         }
 
         // Some atlas rows do not expose a Map* code through the simple first-field path.
@@ -491,6 +628,18 @@ public sealed class Poe2Atlas
 
         if (parentCount.Count == 0) return false;
         _nodeCanvas = parentCount.OrderByDescending(k => k.Value).First().Key;
+        _currentMarker = 0;
+        var nodeSet = new HashSet<nint>(byVtable[bestVtable]);
+        foreach (var el in byVtable.Values.SelectMany(v => v))
+        {
+            if (nodeSet.Contains(el)) continue;
+            var target = Ptr(el + Poe2.AtlasGraph.CurrentMarkerNodePtr);
+            if (target != 0 && nodeSet.Contains(target))
+            {
+                _currentMarker = el;
+                break;
+            }
+        }
         return _nodeCanvas != 0;
     }
 
@@ -501,6 +650,9 @@ public sealed class Poe2Atlas
         _hiddenTicks = 0;
         _nodeRetry = 0;
         _tagCache.Clear();
+        _graph.Clear();
+        _graphCanvas = 0;
+        _currentMarker = 0;
         AllTagsResolved = false;
     }
 

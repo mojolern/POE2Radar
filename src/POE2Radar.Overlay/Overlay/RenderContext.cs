@@ -81,5 +81,8 @@ public sealed record RenderContext(
     IReadOnlyList<RuneLabel>? RuneLabels = null,
     IReadOnlyList<Poe2Atlas.AtlasNodeLive>? AtlasNodes = null,
     IReadOnlyList<AtlasMark>? AtlasMarks = null,
+    NumVec2? AtlasRouteStart = null,
+    NumVec2? AtlasRouteEnd = null,
+    IReadOnlyList<NumVec2>? AtlasRoute = null,
     string? AtlasLoadingText = null,
     float AtlasLoadingProgress = 0f);

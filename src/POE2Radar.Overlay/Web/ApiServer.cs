@@ -156,7 +156,9 @@ public sealed class ApiServer : IDisposable
                     boss = e.IsBoss, league = e.League.ToString(), locked = e.IsLocked, large = e.IsLarge,
                     source = e.IsSleeping ? "Sleeping" : "Awake",
                     sleeping = e.IsSleeping, mechanicAnchor = e.IsMechanicAnchor, iconComplete = e.IconComplete,
-                    mods = e.ModList, itemArt = e.ItemArt, itemName = e.ItemName, itemIdentified = e.ItemIdentified,
+                    mods = e.ModList, itemArt = e.ItemArt, itemName = e.ItemName,
+                    itemIdentified = e.ItemIdentified, itemMods = e.ItemModList,
+                    itemStackCount = e.ItemStackCount,
                     watched = _watched.IsWatched(e.Metadata),
                 });
                 WriteJson(ctx, list);
