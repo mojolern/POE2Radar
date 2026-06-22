@@ -546,6 +546,27 @@ public sealed class Poe2Live
             dots.RemoveAt(i--);
         }
 
+        // Abyss preloads a whole trail of cracks plus one or more final nodes. Rendering every
+        // crack makes the map noisy; final/plinth nodes are the useful "there is Abyss here"
+        // anchors. Keep cracks only when a capture exposes no stronger Abyss anchor.
+        var hasAbyssFocus = dots.Any(d =>
+            d.IsMechanicAnchor &&
+            d.League == LeagueMechanic.Abyss &&
+            !d.IconComplete &&
+            IsAbyssFocusAnchor(d.Metadata));
+        if (hasAbyssFocus)
+        {
+            for (var i = dots.Count - 1; i >= 0; i--)
+            {
+                var d = dots[i];
+                if (d.IsMechanicAnchor &&
+                    d.League == LeagueMechanic.Abyss &&
+                    !d.IconComplete &&
+                    IsAbyssCrackAnchor(d.Metadata))
+                    dots.RemoveAt(i);
+            }
+        }
+
         // Dedup transitions stacked at the same grid cell (game spawns many overlapping transition entities)
         var seenTransPos = _seenTransitionPositions;
         seenTransPos.Clear();
@@ -721,6 +742,67 @@ public sealed class Poe2Live
         return (true, complete);
     }
 
+    public readonly record struct MonolithState(
+        bool Resolved, int HoleCount, int AnchorIdx, int AnchorPos, bool IsUnique, bool Collected);
+
+    public MonolithState ReadMonolith(nint device)
+    {
+        var (_, collected) = ReadIcon(device);
+        var fail = new MonolithState(false, 0, -1, -1, false, collected);
+
+        var stateMachine = ResolveComponent(device, "StateMachine");
+        if (stateMachine == 0) return fail;
+
+        var first = Ptr(stateMachine + Poe2.StateMachine.ListenerVec);
+        if (first == 0 ||
+            !_reader.TryReadStruct<nint>(stateMachine + Poe2.StateMachine.ListenerVec + 8, out var last))
+            return fail;
+
+        var count = ((long)last - first) / 8;
+        if (count is <= 0 or > 256) return fail;
+
+        nint station = 0;
+        for (long i = 0; i < count; i++)
+        {
+            var node = Ptr(first + (nint)(i * 8));
+            var listener = node == 0 ? 0 : Ptr(node);
+            if (listener == 0) continue;
+
+            var candidate = listener - Poe2.RuneStation.ListenerSub;
+            if (Ptr(candidate + Poe2.RuneStation.Owner) == device)
+            {
+                station = candidate;
+                break;
+            }
+        }
+        if (station == 0) return fail;
+
+        if (!_reader.TryReadStruct<int>(station + Poe2.RuneStation.HoleCount, out var holes) ||
+            holes is <= 0 or > 16)
+            return fail;
+
+        _reader.TryReadStruct<int>(station + Poe2.RuneStation.AnchorPos, out var anchorPos);
+
+        var rowPtr = Ptr(station + Poe2.RuneStation.AnchorRef);
+        if (rowPtr == 0)
+            return new MonolithState(true, holes, -1, -1, true, collected);
+
+        var holder = Ptr(station + Poe2.RuneStation.AnchorHolder);
+        var tablePtr = holder == 0 ? 0 : Ptr(holder + 0x28);
+        if (tablePtr == 0 ||
+            !_reader.TryReadStruct<long>(tablePtr, out var tableBase) ||
+            tableBase == 0)
+            return new MonolithState(true, holes, -1, anchorPos, false, collected);
+
+        var delta = (long)rowPtr - tableBase;
+        var anchorIdx = delta >= 0 && delta % Poe2.RuneStation.RuneStride == 0
+            ? (int)(delta / Poe2.RuneStation.RuneStride)
+            : -1;
+        if (anchorIdx < 0 || anchorIdx >= Poe2.RuneStation.RuneCount) anchorIdx = -1;
+
+        return new MonolithState(true, holes, anchorIdx, anchorPos, false, collected);
+    }
+
     private Rarity ReadRarity(nint entity)
     {
         if (!_ompAddr.TryGetValue(entity, out var omp))
@@ -833,6 +915,47 @@ public sealed class Poe2Live
         var result = (rarity, art, itemName, identified, itemMods, stackCount);
         _itemIdent[entity] = result;
         return result;
+    }
+
+    private (Rarity Rarity, string? Art, string? Name, bool Identified, string[] Mods, int StackCount) ReadItemEntityIdentity(nint item)
+    {
+        var rarity = Rarity.NonMonster;
+        var identified = true;
+        var mods = ResolveComponent(item, "Mods");
+        if (mods != 0)
+        {
+            if (_reader.TryReadStruct<int>(mods + Poe2.ModsComponent.Rarity, out var r) &&
+                r is >= 0 and <= 3)
+                rarity = (Rarity)r;
+            if (_reader.TryReadStruct<int>(mods + Poe2.ModsComponent.Identified, out var id))
+                identified = id != 0;
+        }
+
+        string? art = null;
+        var renderItem = ResolveComponent(item, "RenderItem");
+        if (renderItem != 0)
+        {
+            var path = Ptr(renderItem + Poe2.RenderItemComponent.ResourcePath);
+            if (path != 0) art = ArtBasename(_reader.ReadStringUtf16(path, 128));
+        }
+
+        string? itemName = null;
+        var baseComp = ResolveComponent(item, "Base");
+        if (baseComp != 0)
+        {
+            var row = Ptr(baseComp + Poe2.BaseComponent.NameRow);
+            var namePtr = row == 0 ? 0 : Ptr(row + Poe2.BaseComponent.RowDisplayName);
+            if (namePtr != 0)
+            {
+                var name = _reader.ReadStringUtf16(namePtr, 64).Trim();
+                if (!string.IsNullOrWhiteSpace(name)) itemName = name;
+            }
+        }
+        itemName ??= ItemNameCandidate(ReadMetadata(item));
+
+        var itemMods = mods == 0 ? Array.Empty<string>() : ReadItemModText(mods);
+        var stackCount = ReadItemStackCount(item);
+        return (rarity, art, itemName, identified, itemMods, stackCount);
     }
 
     private int ReadItemStackCount(nint item)
@@ -1461,6 +1584,212 @@ public sealed class Poe2Live
         return (flags & (1u << Poe2.UiElement.FlagVisibleBit)) != 0;
     }
 
+    public readonly record struct RitualReward(
+        Rarity Rarity, string? Art, string? Name, bool Identified, float X, float Y, float W, float H);
+
+    public List<RitualReward> ReadRitualRewards(nint inGameState, float winW, float winH)
+    {
+        var result = new List<RitualReward>();
+        var uiRoot = Ptr(inGameState + Poe2.InGameState.UiRoot);
+        if (uiRoot == 0) return result;
+
+        const uint visibleBit = 1u << Poe2.UiElement.FlagVisibleBit;
+        nint signature = 0;
+        var queue = new Queue<nint>();
+        var visited = new HashSet<nint>();
+        queue.Enqueue(uiRoot);
+
+        while (queue.Count > 0 && visited.Count < 20000)
+        {
+            var element = queue.Dequeue();
+            if (element == 0 || !visited.Add(element)) continue;
+            var visible = _reader.TryReadStruct<uint>(element + Poe2.UiElement.Flags, out var flags) &&
+                          (flags & visibleBit) != 0;
+            if (!visible && element != uiRoot) continue;
+
+            if (ChildSpan(element, out var childFirst, out var childCount))
+            {
+                for (long i = 0; i < childCount; i++)
+                    queue.Enqueue(Ptr(childFirst + (nint)(i * 8)));
+            }
+
+            if (signature != 0) continue;
+            var text = ReadStdWString(element + Poe2.UiElement.Text);
+            if (text.Contains("Rituals Remaining", StringComparison.OrdinalIgnoreCase) ||
+                text.Contains("tribute to the king", StringComparison.OrdinalIgnoreCase))
+                signature = element;
+        }
+
+        if (signature == 0) return result;
+
+        var current = signature;
+        nint grid = 0;
+        for (var depth = 0; depth < 8 && grid == 0; depth++)
+        {
+            grid = FindRewardGrid(current);
+            var parent = Ptr(current + Poe2.UiElement.Parent);
+            if (parent == 0) break;
+            current = parent;
+        }
+
+        if (grid == 0 || !ChildSpan(grid, out var gridFirst, out var gridCount)) return result;
+
+        for (long i = 0; i < gridCount; i++)
+        {
+            var tile = Ptr(gridFirst + (nint)(i * 8));
+            var item = TileItem(tile);
+            if (item == 0) continue;
+
+            var (rarity, art, name, identified, _, _) = ReadItemEntityIdentity(item);
+            if (!TryUiElementRect(tile, winW, winH, out var x, out var y, out var w, out var h)) continue;
+            result.Add(new RitualReward(rarity, art, name, identified, x, y, w, h));
+        }
+
+        return result;
+    }
+
+    public bool TryUiElementRect(
+        nint element,
+        float winW,
+        float winH,
+        out float x,
+        out float y,
+        out float w,
+        out float h,
+        string? requireFirstLine = null)
+    {
+        x = y = w = h = 0f;
+        if (element == 0) return false;
+        if (!_reader.TryReadStruct<uint>(element + Poe2.UiElement.Flags, out var flags)) return false;
+        if ((flags & (1u << Poe2.UiElement.FlagVisibleBit)) == 0) return false;
+
+        if (requireFirstLine is { Length: > 0 })
+        {
+            var text = ReadStdWString(element + Poe2.UiElement.Text);
+            var newline = text.IndexOf('\n');
+            var firstLine = (newline >= 0 ? text[..newline] : text).Trim();
+            if (!string.Equals(firstLine, requireFirstLine, StringComparison.Ordinal)) return false;
+        }
+
+        if (!_reader.TryReadStruct<byte>(element + Poe2.UiElement.ScaleIndex, out var scaleIndex)) return false;
+        _reader.TryReadStruct<float>(element + Poe2.UiElement.LocalScaleMul, out var scaleMul);
+        _reader.TryReadStruct<System.Numerics.Vector2>(element + Poe2.UiElement.SizeW, out var size);
+
+        var (scaleX, scaleY) = UiScaleValue(scaleIndex, scaleMul, winW, winH);
+        if (scaleX <= 0f || scaleY <= 0f) return false;
+
+        var (posX, posY) = UiUnscaledPos(element, 0);
+        if (!float.IsFinite(posX) || !float.IsFinite(posY)) return false;
+
+        x = posX * scaleX;
+        y = posY * scaleY;
+        w = size.X * scaleX;
+        h = size.Y * scaleY;
+        return w > 1f && h > 1f;
+    }
+
+    public bool TryRelPos(nint element, out float x, out float y)
+    {
+        x = y = 0f;
+        if (element == 0) return false;
+        if (!_reader.TryReadStruct<nint>(element + Poe2.UiElement.Self, out var self) || self != element) return false;
+        if (!_reader.TryReadStruct<System.Numerics.Vector2>(element + Poe2.UiElement.RelativePos, out var value)) return false;
+        if (!float.IsFinite(value.X) || !float.IsFinite(value.Y) ||
+            MathF.Abs(value.X) > 200000f || MathF.Abs(value.Y) > 200000f)
+            return false;
+
+        x = value.X;
+        y = value.Y;
+        return true;
+    }
+
+    private nint FindRewardGrid(nint parent)
+    {
+        if (!ChildSpan(parent, out var first, out var count)) return 0;
+
+        nint best = 0;
+        var bestItems = 0;
+        for (long i = 0; i < count; i++)
+        {
+            var child = Ptr(first + (nint)(i * 8));
+            if (!ChildSpan(child, out var childFirst, out var childCount) || childCount is < 1 or > 16) continue;
+
+            var items = 0;
+            for (long j = 0; j < childCount; j++)
+                if (TileItem(Ptr(childFirst + (nint)(j * 8))) != 0)
+                    items++;
+
+            if (items >= 2 && items > bestItems && items * 2 >= childCount)
+            {
+                best = child;
+                bestItems = items;
+            }
+        }
+        return best;
+    }
+
+    private nint TileItem(nint tile)
+    {
+        if (tile == 0) return 0;
+        var item = Ptr(tile + Poe2.Ritual.TileSlotItem);
+        return item != 0 && ResolveComponent(item, "RenderItem") != 0 ? item : 0;
+    }
+
+    private bool ChildSpan(nint element, out nint first, out long count)
+    {
+        first = Ptr(element + Poe2.UiElement.Children);
+        count = 0;
+        if (first == 0) return false;
+        if (!_reader.TryReadStruct<nint>(element + Poe2.UiElement.ChildrenEnd, out var last)) return false;
+        count = ((long)last - (long)first) / 8;
+        return count is > 0 and <= 4000;
+    }
+
+    private static (float X, float Y) UiScaleValue(byte index, float multiplier, float winW, float winH)
+    {
+        if (multiplier == 0f) multiplier = 1f;
+        var sx = multiplier;
+        var sy = multiplier;
+        var v1 = winW / (float)Poe2.UiElement.BaseResW;
+        var v2 = winH / (float)Poe2.UiElement.BaseResH;
+
+        switch (index)
+        {
+            case 1:
+                sx *= v1;
+                sy *= v1;
+                break;
+            case 2:
+                sx *= v2;
+                sy *= v2;
+                break;
+            case 3:
+                sx *= v1;
+                sy *= v2;
+                break;
+        }
+
+        return (sx, sy);
+    }
+
+    private (float X, float Y) UiUnscaledPos(nint element, int depth)
+    {
+        _reader.TryReadStruct<System.Numerics.Vector2>(element + Poe2.UiElement.RelativePos, out var rel);
+        var parent = Ptr(element + Poe2.UiElement.Parent);
+        if (parent == 0 || depth >= 64) return (rel.X, rel.Y);
+
+        var (px, py) = UiUnscaledPos(parent, depth + 1);
+        if (_reader.TryReadStruct<uint>(element + Poe2.UiElement.Flags, out var flags) &&
+            (flags & (1u << Poe2.UiElement.FlagModifyPosBit)) != 0)
+        {
+            _reader.TryReadStruct<System.Numerics.Vector2>(element + Poe2.UiElement.PositionModifier, out var mod);
+            px += mod.X;
+            py += mod.Y;
+        }
+
+        return (px + rel.X, py + rel.Y);
+    }
+
     public bool TryReadAtlasSnapshot(nint inGameState, out AtlasSnapshot snapshot)
     {
         snapshot = new AtlasSnapshot(false, 0, 0, 1f, default, default, default, Array.Empty<AtlasNode>());
@@ -1646,7 +1975,9 @@ public sealed class Poe2Live
             "BreachObject",
             "BreachPortal",
             "AbyssJumpInteractable",
+            "AbyssCrack",
             "AbyssFinalNodeBase",
+            "AbyssPlinth",
             "AbyssStart",
             "AbyssNode",
             "/Monsters/RogueExiles/",
@@ -1661,6 +1992,16 @@ public sealed class Poe2Live
                 return true;
         return false;
     }
+
+    private static bool IsAbyssFocusAnchor(string meta) =>
+        meta.Contains("AbyssFinalNodeBase", StringComparison.OrdinalIgnoreCase) ||
+        meta.Contains("AbyssPlinth", StringComparison.OrdinalIgnoreCase) ||
+        meta.Contains("AbyssJumpInteractable", StringComparison.OrdinalIgnoreCase) ||
+        meta.Contains("AbyssStart", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAbyssCrackAnchor(string meta) =>
+        meta.Contains("AbyssCrack", StringComparison.OrdinalIgnoreCase) &&
+        !IsAbyssFocusAnchor(meta);
 
     private static bool IsLikelyEssenceAnchor(
         string metadata,

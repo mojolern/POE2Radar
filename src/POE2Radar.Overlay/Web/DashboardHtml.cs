@@ -337,6 +337,17 @@ code{color:var(--gold-bright)}
         <label><input type="checkbox" class="price-cat" value="Essences"> Essences</label>
         <label><input type="checkbox" class="price-cat" value="Currency"> Currency</label>
       </div>
+      <h3 style="margin-top:14px">Monolith Rewards</h3>
+      <div class="display-rule-grid">
+        <label><input type="checkbox" id="monoEnabled"> Show monolith reward overlay</label>
+        <label><input type="checkbox" id="monoHideCollected"> Hide collected monoliths</label>
+        <label><input type="checkbox" id="monoPanel"> Show reward panel</label>
+        <label><input type="checkbox" id="monoMapLabel"> Show map label</label>
+        <label>Min value to show / auto-path (ex)<input type="number" id="monoMinValue" min="0" step="1"></label>
+        <label>Highlight threshold (ex)<input type="number" id="monoHighlight" min="0" step="1"></label>
+        <label>Panel reward minimum (ex)<input type="number" id="monoMinReward" min="0" step="0.5"></label>
+        <label>Panel max distance<input type="number" id="monoPanelDistance" min="0" step="10"></label>
+      </div>
     </div>
   </div>
   <div class="action-rail">
@@ -800,6 +811,15 @@ async function loadDisplayPage(){
     $('priceQty').value=g.minQuantity??2;
     renderPriceLeagues(priceLeagues,g.league||'',prices.league||'');
     document.querySelectorAll('.price-cat').forEach(c=>c.checked=(g.categories||[]).includes(c.value));
+    const m=settings.monoliths||{};
+    $('monoEnabled').checked=m.enabled!==false;
+    $('monoHideCollected').checked=m.hideCollected!==false;
+    $('monoPanel').checked=m.showPanel!==false;
+    $('monoMapLabel').checked=m.showMapLabel!==false;
+    $('monoMinValue').value=m.minValueEx??0;
+    $('monoHighlight').value=m.highlightMinEx??30;
+    $('monoMinReward').value=m.minRewardEx??1;
+    $('monoPanelDistance').value=m.panelMaxDistance??0;
     $('priceStatus').textContent=formatPriceStatus(prices);
     renderHotkeyLegend();
     renderDisplayRules();
@@ -846,9 +866,19 @@ async function saveDisplayPage(){
     league:$('priceLeague').value.trim(),
     categories:[...document.querySelectorAll('.price-cat:checked')].map(c=>c.value)
   };
+  const monoliths={
+    enabled:$('monoEnabled').checked,
+    hideCollected:$('monoHideCollected').checked,
+    showPanel:$('monoPanel').checked,
+    showMapLabel:$('monoMapLabel').checked,
+    minValueEx:parseFloat($('monoMinValue').value)||0,
+    highlightMinEx:parseFloat($('monoHighlight').value)||0,
+    minRewardEx:parseFloat($('monoMinReward').value)||0,
+    panelMaxDistance:parseFloat($('monoPanelDistance').value)||0
+  };
   await Promise.all([
     fetch('/api/display-rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(clean)}),
-    fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groundItems})})
+    fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groundItems,monoliths})})
   ]);
   displayRules=clean;
   $('displaySavedMsg').classList.add('show');
@@ -1095,6 +1125,8 @@ const atlasSettingsDef = [
   {key:'atlasShowLabels',label:'Show Node Labels',type:'bool'},
   {key:'atlasDrawAll',label:'Draw All Nodes (debug)',type:'bool'},
   {key:'atlasShowWaypointArrows',label:'Show Off-Screen Waypoint Arrows',type:'bool'},
+  {key:'atlasHideVisitedMaps',label:'Hide Visited Maps',type:'bool'},
+  {key:'atlasHideCompletedMaps',label:'Hide Completed Maps',type:'bool'},
   {key:'atlasNodeColor',label:'Debug Node Color',type:'color'},
   {key:'atlasWaypointColor',label:'Waypoint Color',type:'color'},
   {key:'atlasNodeDotSize',label:'Debug Node Dot Size',type:'num',min:1,max:12,step:0.5},

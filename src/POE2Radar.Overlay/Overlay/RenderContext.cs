@@ -32,6 +32,33 @@ public readonly record struct RuneLabel(
     string Text,
     uint Color);
 
+public readonly record struct RitualLabel(
+    float X,
+    float Y,
+    float W,
+    float H,
+    string Text,
+    uint Color,
+    bool Highlight);
+
+public readonly record struct MonolithReward(
+    string Name,
+    int Count,
+    double Ex,
+    int Size,
+    string Runes);
+
+public sealed record MonolithMarker(
+    NumVec2 Grid,
+    int Holes,
+    bool IsUnique,
+    bool Collected,
+    string AnchorName,
+    double BestEx,
+    string BestName,
+    uint Color,
+    IReadOnlyList<MonolithReward> Rewards);
+
 public sealed record RenderContext(
     bool InGame,
     bool Active,
@@ -79,6 +106,9 @@ public sealed record RenderContext(
     POE2Radar.Core.Game.Vector3? PlayerWorld = null,
     IReadOnlyList<ItemLabel>? ItemLabels = null,
     IReadOnlyList<RuneLabel>? RuneLabels = null,
+    IReadOnlyList<RitualLabel>? RitualRewards = null,
+    IReadOnlyList<MonolithMarker>? Monoliths = null,
+    bool ShowMonolithPanel = true,
     IReadOnlyList<Poe2Atlas.AtlasNodeLive>? AtlasNodes = null,
     IReadOnlyList<AtlasMark>? AtlasMarks = null,
     NumVec2? AtlasRouteStart = null,

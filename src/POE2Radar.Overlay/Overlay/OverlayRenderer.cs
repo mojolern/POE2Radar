@@ -184,7 +184,12 @@ public sealed class OverlayRenderer : IDisposable
                     DrawZoneGuide(rt, ctx);
                 if (ctx.PathTargetName != null)
                     DrawPathTarget(rt, ctx);
-                if (ctx.InGame) DrawRuneforge(rt, ctx);
+                if (ctx.InGame)
+                {
+                    DrawRuneforge(rt, ctx);
+                    DrawRitualRewards(rt, ctx);
+                    DrawMonolithPanel(rt, ctx);
+                }
             }
         }
         finally
@@ -487,6 +492,112 @@ public sealed class OverlayRenderer : IDisposable
         }
     }
 
+    private void DrawRitualRewards(ID2D1RenderTarget rt, RenderContext ctx)
+    {
+        if (ctx.RitualRewards is not { Count: > 0 } labels) return;
+        const float boxH = 20f;
+        foreach (var label in labels)
+        {
+            var boxW = MathF.Max(44f, 7.5f * (label.Text.Length + 1));
+            var cx = label.X + label.W * 0.5f;
+            var top = label.Y + label.H - boxH;
+            var box = new Vortice.RawRectF(cx - boxW * 0.5f, top, cx + boxW * 0.5f, top + boxH);
+            rt.FillRectangle(box, _bPanel!);
+            if (label.Highlight)
+            {
+                _bStyle!.Color = new Color4(1f, 0.8f, 0.2f, 1f);
+                rt.DrawRectangle(box, _bStyle, 2f);
+            }
+            _bStyle!.Color = ColorFromPacked(label.Color);
+            rt.DrawText(label.Text, _tf!, new Rect(
+                box.Left + 3f, top + 1f, box.Right - 2f, top + boxH - 1f),
+                _bStyle, DrawTextOptions.Clip);
+        }
+    }
+
+    private void DrawMonoliths(ID2D1RenderTarget rt, RenderContext ctx, NumVec2 player, NumVec2 center, float scale)
+    {
+        if (ctx.Monoliths is not { Count: > 0 } markers) return;
+        foreach (var marker in markers)
+        {
+            var p = Project(marker.Grid, player, center, scale);
+            _bStyle!.Color = ColorFromPacked(marker.Color);
+            rt.DrawEllipse(new Ellipse(p, 9f, 9f), _bStyle, 2.4f);
+            rt.DrawText(marker.Holes.ToString(), _tf!,
+                new Rect(p.X - 4f, p.Y - 8f, p.X + 10f, p.Y + 8f),
+                _bText!, DrawTextOptions.Clip);
+
+            if (ctx.Radar?.Monoliths.ShowMapLabel == false) continue;
+            var label = marker.BestEx > 0
+                ? $"{_priceLabel(marker.BestEx)} - {marker.BestName}"
+                : $"{marker.AnchorName} {marker.Holes}h";
+            rt.DrawText(label, _tf!,
+                new Rect(p.X + 13f, p.Y - 8f, p.X + 340f, p.Y + 9f),
+                _bStyle, DrawTextOptions.Clip);
+        }
+
+        static string _priceLabel(double ex) => ex >= 100 ? $"{ex:F0} ex" : $"{ex:0.##} ex";
+    }
+
+    private void DrawMonolithPanel(ID2D1RenderTarget rt, RenderContext ctx)
+    {
+        if (!ctx.ShowMonolithPanel || ctx.Monoliths is not { Count: > 0 } markers) return;
+        var cfg = ctx.Radar?.Monoliths;
+        var list = markers
+            .Where(m => cfg?.PanelMaxDistance is null or <= 0f || (m.Grid - ctx.PlayerGrid).Length() <= cfg.PanelMaxDistance)
+            .OrderByDescending(m => m.BestEx)
+            .Take(6)
+            .ToList();
+        if (list.Count == 0) return;
+
+        const float w = 270f;
+        const float pad = 6f;
+        const float lineH = 15f;
+        const float headH = 17f;
+        const float titleH = 18f;
+
+        var minReward = cfg?.MinRewardEx ?? 1.0;
+        var rowsPerMarker = new List<int>(list.Count);
+        float h = pad * 2f + titleH;
+        foreach (var marker in list)
+        {
+            var rows = marker.Rewards.Count(r => r.Ex >= minReward);
+            rows = Math.Min(rows, 3);
+            rowsPerMarker.Add(rows);
+            h += headH + lineH * rows;
+        }
+
+        var x = ctx.WindowWidth - w - 10f;
+        var y = 90f;
+        rt.FillRectangle(new Vortice.RawRectF(x, y, x + w, y + h), _bPanel!);
+        var cy = y + pad;
+        rt.DrawText($"Monoliths ({markers.Count})", _tf!,
+            new Rect(x + pad, cy, x + w - pad, cy + titleH),
+            _bText!, DrawTextOptions.Clip);
+        cy += titleH;
+
+        foreach (var marker in list)
+        {
+            _bStyle!.Color = ColorFromPacked(marker.Color);
+            var header = marker.BestEx > 0
+                ? $"{marker.BestEx:0.##} ex - {marker.AnchorName} {marker.Holes}h"
+                : $"{marker.AnchorName} {marker.Holes}h";
+            rt.DrawText(header, _tf!, new Rect(x + pad, cy, x + w - pad, cy + headH), _bStyle, DrawTextOptions.Clip);
+            cy += headH;
+
+            var shown = 0;
+            foreach (var reward in marker.Rewards)
+            {
+                if (reward.Ex < minReward || shown >= 3) continue;
+                rt.DrawText($"  {reward.Ex,5:0.##}  {reward.Name}", _tf!,
+                    new Rect(x + pad, cy, x + w - pad, cy + lineH),
+                    _bText!, DrawTextOptions.Clip);
+                cy += lineH;
+                shown++;
+            }
+        }
+    }
+
     private static Color4 ColorFromPacked(uint value) => new(
         ((value >> 16) & 0xFF) / 255f,
         ((value >> 8) & 0xFF) / 255f,
@@ -726,6 +837,8 @@ public sealed class OverlayRenderer : IDisposable
         foreach (var node in nodes)
         {
             if (!node.Visible && !showHidden) continue;
+            if (settings?.AtlasHideVisitedMaps == true && node.Visited) continue;
+            if (settings?.AtlasHideCompletedMaps == true && node.Completion != 0) continue;
             var p = new NumVec2((node.X + node.W * 0.5f) * scale, (node.Y + node.H * 0.5f) * scale) + offset;
             if (p.X < -40f || p.X > ctx.WindowWidth + 40f || p.Y < -40f || p.Y > ctx.WindowHeight + 40f)
                 continue;
@@ -1343,6 +1456,8 @@ public sealed class OverlayRenderer : IDisposable
                 _bRing = rt.CreateSolidColorBrush(new Color4(0f, 1f, 1f, 0.5f));
             rt.DrawEllipse(new Ellipse(center, ringR, ringR), _bRing, 2f);
         }
+
+        DrawMonoliths(rt, ctx, player, center, scale);
 
         // Player blip on top.
         var pb = rs?.PlayerBlipSize ?? 5f;

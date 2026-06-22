@@ -33,7 +33,7 @@ public sealed class ProcessHandle : IDisposable
     /// Returns null if no matching process is running.
     /// </summary>
     /// <param name="candidateNames">Process names to search for (without ".exe"). Defaults cover standalone + Steam clients.</param>
-    public static ProcessHandle? AttachToPoE(IReadOnlyList<string>? candidateNames = null)
+    public static ProcessHandle? AttachToPoE(IReadOnlyList<string>? candidateNames = null, bool includeWriteAccess = true)
     {
         // PoE2 client process names (window title "Path of Exile 2"). Source: GameHelper2
         // GameProcessName.cs — see resources/community-offsets.md.
@@ -46,7 +46,7 @@ public sealed class ProcessHandle : IDisposable
             {
                 if (procs.Length == 0) continue;
                 var proc = procs[0]; // ambiguous-multiple-instances is a "deal with later" problem
-                return AttachToProcess(proc.Id, name);
+                return AttachToProcess(proc.Id, name, includeWriteAccess);
             }
             finally
             {
@@ -61,11 +61,14 @@ public sealed class ProcessHandle : IDisposable
     /// Open the given PID for read access, locate the main EXE module, and return a handle wrapper.
     /// Throws Win32Exception on OpenProcess failure (typically ERROR_ACCESS_DENIED â€” re-run as admin).
     /// </summary>
-    public static ProcessHandle AttachToProcess(int processId, string? expectedProcessName = null)
+    public static ProcessHandle AttachToProcess(int processId, string? expectedProcessName = null, bool includeWriteAccess = true)
     {
+        var desiredAccess = NativeMethods.PROCESS_VM_READ | NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION;
+        if (includeWriteAccess)
+            desiredAccess |= NativeMethods.PROCESS_VM_WRITE | NativeMethods.PROCESS_VM_OPERATION;
+
         var handle = NativeMethods.OpenProcess(
-            NativeMethods.PROCESS_VM_READ | NativeMethods.PROCESS_VM_WRITE | NativeMethods.PROCESS_VM_OPERATION
-            | NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION,
+            desiredAccess,
             false,
             (uint)processId);
 

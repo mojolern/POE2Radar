@@ -79,9 +79,51 @@ public sealed class Poe2Runeforge
         return result;
     }
 
+    /// <summary>
+    /// Research helper: resolves the recipes container without requiring the visible gate.
+    /// Does not use or update the visible-panel cache.
+    /// </summary>
+    public List<RuneReward> ReadRewardsIncludingHidden(nint inGameState, float winW, float winH, out bool resolved)
+    {
+        resolved = false;
+        var result = new List<RuneReward>();
+        var gameUi = Ptr(inGameState + Poe2.InGameState.UiRoot);
+        if (gameUi == 0) return result;
+
+        nint viewport = 0;
+        var panel = Walk(gameUi, 0, requireVisibleGate: false, ref viewport);
+        if (panel == 0 || !Children(panel, out var first, out var n)) return result;
+        resolved = true;
+
+        var scroll = ReadScroll(viewport);
+        for (long i = 0; i < n; i++)
+        {
+            var row = Ptr(first + (nint)(i * 8));
+            if (row == 0) continue;
+            var label = Child(row, 0);
+            if (label == 0) continue;
+            var raw = ReadStdWString(label + Poe2.Runeforge.NameWString);
+            if (string.IsNullOrEmpty(raw)) continue;
+            ParseNameCount(raw, out var count, out var name);
+            if (!TryScreenRect(row, scroll, winW, winH, out var pos, out var size))
+            {
+                pos = default;
+                size = default;
+            }
+            result.Add(new RuneReward(count, name, pos.X, pos.Y, size.X, size.Y));
+        }
+
+        return result;
+    }
+
     // ── panel resolution (flag-fingerprint walk with backtracking) ─────────────────────────────────
 
     private nint Walk(nint parent, int step)
+    {
+        return Walk(parent, step, requireVisibleGate: true, ref _viewport);
+    }
+
+    private nint Walk(nint parent, int step, bool requireVisibleGate, ref nint viewport)
     {
         var fps = Poe2.Runeforge.PanelFlagFingerprints;
         const uint visibleMask = 1u << Poe2.UiElement.FlagVisibleBit;
@@ -99,11 +141,11 @@ public sealed class Poe2Runeforge
                 if ((flags & ~visibleMask) != target) continue;
                 var visible = (flags & visibleMask) != 0;
                 if (visible != wantVisible) continue;
-                if (step == Poe2.Runeforge.GateStep && !visible) continue;  // panel-open gate
-                var deeper = Walk(child, step + 1);
+                if (requireVisibleGate && step == Poe2.Runeforge.GateStep && !visible) continue;  // panel-open gate
+                var deeper = Walk(child, step + 1, requireVisibleGate, ref viewport);
                 if (deeper != 0)
                 {
-                    if (step == Poe2.Runeforge.ViewportStep) _viewport = child; // for the scroll offset
+                    if (step == Poe2.Runeforge.ViewportStep) viewport = child; // for the scroll offset
                     return deeper;
                 }
             }

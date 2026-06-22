@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -46,7 +47,23 @@ Console.WriteLine(new string('=', myName.Length));
 ProcessHandle? process;
 try
 {
-    process = ProcessHandle.AttachToPoE();
+    process = ProcessHandle.AttachToPoE(includeWriteAccess: true);
+}
+catch (Win32Exception ex) when (ex.NativeErrorCode == 5)
+{
+    Console.WriteLine("Write-capable attach was denied by the client; falling back to read-only radar mode.");
+    Console.WriteLine("Byte-patch cheats and visual write tweaks may be unavailable in this session.");
+    try
+    {
+        process = ProcessHandle.AttachToPoE(includeWriteAccess: false);
+    }
+    catch (Exception readOnlyEx)
+    {
+        Console.Error.WriteLine($"Failed to attach read-only: {readOnlyEx.Message}");
+        Console.WriteLine("Press any key to exit...");
+        Console.ReadKey();
+        return 1;
+    }
 }
 catch (Exception ex)
 {

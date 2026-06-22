@@ -706,7 +706,8 @@ public sealed record RadarState(
     string AreaCode, string CharName, int CharLevel,
     string? AreaName = null, int Act = 0, bool IsTown = false, bool HasWaypoint = false,
     float MapShiftX = 0, float MapShiftY = 0,
-    bool GameMinimapAvailable = false, float GameMinimapShiftX = 0, float GameMinimapShiftY = 0, float GameMinimapZoom = 0)
+    bool GameMinimapAvailable = false, float GameMinimapShiftX = 0, float GameMinimapShiftY = 0, float GameMinimapZoom = 0,
+    IReadOnlyList<MonolithMarker>? Monoliths = null)
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,

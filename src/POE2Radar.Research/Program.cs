@@ -1,5 +1,6 @@
 using POE2Radar.Core;
 using POE2Radar.Core.Game;
+using System.Runtime.InteropServices;
 
 // POE2Radar.Research — dev-time offset discovery / validation harness.
 //
@@ -14,7 +15,8 @@ using POE2Radar.Core.Game;
 Console.WriteLine("POE2Radar.Research");
 Console.WriteLine("==================");
 
-using var process = ProcessHandle.AttachToPoE();
+var needsWriteAccess = HasFlag(args, "--confirm-write");
+using var process = ProcessHandle.AttachToPoE(includeWriteAccess: needsWriteAccess);
 if (process is null)
 {
     Console.Error.WriteLine("PoE2 not running (no matching process found).");
@@ -60,6 +62,177 @@ if (HasFlag(args, "--watch"))
 if (HasFlag(args, "--tiles"))
     return RunTiles(process, reader);
 
+if (HasFlag(args, "--entry-snapshot"))
+    return RunEntrySnapshot(
+        process,
+        reader,
+        HasFlag(args, "--entry-all"),
+        TryGetIntArg(args, "--max-entities") ?? 3000,
+        TryGetIntArg(args, "--ui-max") ?? 6000);
+
+if (HasFlag(args, "--rune-ui-probe"))
+    return RunRuneUiProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--ui-max") ?? 12000,
+        TryGetIntArg(args, "--context-children") ?? 12);
+
+if (HasFlag(args, "--runeforge-read"))
+    return RunRuneforgeRead(
+        process,
+        reader,
+        TryGetIntArg(args, "--win-w") ?? 1920,
+        TryGetIntArg(args, "--win-h") ?? 1080);
+
+if (HasFlag(args, "--runeforge-correlate"))
+    return RunRuneforgeCorrelate(
+        process,
+        reader,
+        TryGetIntArg(args, "--win-w") ?? 1920,
+        TryGetIntArg(args, "--win-h") ?? 1080,
+        TryGetIntArg(args, "--ui-max") ?? 20000);
+
+if (HasFlag(args, "--runeforge-inventory-probe"))
+    return RunRuneforgeInventoryProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--component-window") ?? 0x1000);
+
+if (HasFlag(args, "--runeforge-inventory-block-probe"))
+    return RunRuneforgeInventoryBlockProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--component-window") ?? 0x900,
+        TryGetIntArg(args, "--entries") ?? 8,
+        TryGetIntArg(args, "--object-window") ?? 0x300);
+
+if (HasFlag(args, "--runeforge-inventory-block-watch"))
+    return RunRuneforgeInventoryBlockWatch(
+        process,
+        reader,
+        TryGetIntArg(args, "--timeout") ?? 90,
+        TryGetIntArg(args, "--component-window") ?? 0x900,
+        TryGetIntArg(args, "--entries") ?? 16,
+        TryGetIntArg(args, "--object-window") ?? 0x300);
+
+if (HasFlag(args, "--runeforge-vector-probe"))
+    return RunRuneforgeVectorProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--object-window") ?? 0x500,
+        TryGetIntArg(args, "--entries") ?? 8);
+
+if (HasFlag(args, "--runeforge-vector-watch"))
+    return RunRuneforgeVectorWatch(
+        process,
+        reader,
+        TryGetIntArg(args, "--timeout") ?? 90,
+        TryGetIntArg(args, "--object-window") ?? 0x500);
+
+if (HasFlag(args, "--runeforge-ui-gate-probe"))
+    return RunRuneforgeUiGateProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32);
+
+if (HasFlag(args, "--runeforge-ui-child-watch"))
+    return RunRuneforgeUiChildWatch(
+        process,
+        reader,
+        TryGetIntArg(args, "--timeout") ?? 90,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32,
+        TryGetIntArg(args, "--field-window") ?? 0x500);
+
+if (HasFlag(args, "--runeforge-ui-populate-timeline"))
+    return RunRuneforgeUiPopulateTimeline(
+        process,
+        reader,
+        TryGetIntArg(args, "--timeout") ?? 90,
+        TryGetIntArg(args, "--poll-ms") ?? 25,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32);
+
+if (HasFlag(args, "--runeforge-ui-latch-write-test"))
+    return RunRuneforgeUiLatchWriteTest(
+        process,
+        reader,
+        HasFlag(args, "--confirm-write"),
+        TryGetIntArg(args, "--timeout") ?? 10,
+        TryGetIntArg(args, "--poll-ms") ?? 10,
+        TryGetIntArg(args, "--hold-ms") ?? 1000,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32);
+
+if (HasFlag(args, "--runeforge-selection-source-probe"))
+    return RunRuneforgeSelectionSourceProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32,
+        TryGetIntArg(args, "--field-window") ?? 0x800,
+        TryGetIntArg(args, "--max-entities") ?? 20);
+
+if (HasFlag(args, "--runeforge-entry-key-scan"))
+    return RunRuneforgeEntryKeyScan(
+        process,
+        reader,
+        TryGetIntArg(args, "--max-entities") ?? 20,
+        TryGetIntArg(args, "--component-window") ?? 0x1800,
+        TryGetIntArg(args, "--object-window") ?? 0x500,
+        TryGetIntArg(args, "--vector-entries") ?? 32);
+
+if (HasFlag(args, "--runeforge-selection-index-watch"))
+    return RunRuneforgeSelectionIndexWatch(
+        process,
+        reader,
+        TryGetIntArg(args, "--timeout") ?? 90,
+        TryGetIntArg(args, "--max-entities") ?? 20,
+        TryGetIntArg(args, "--component-window") ?? 0x1800,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32);
+
+if (HasFlag(args, "--runeforge-interaction-block-probe"))
+    return RunRuneforgeInteractionBlockProbe(
+        process,
+        reader,
+        TryGetIntArg(args, "--timeout") ?? 90,
+        TryGetIntArg(args, "--max-entities") ?? 20,
+        TryGetIntArg(args, "--component-window") ?? 0x1800,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32);
+
+if (HasFlag(args, "--runeforge-selection-fingerprint-watch"))
+    return RunRuneforgeSelectionFingerprintWatch(
+        process,
+        reader,
+        TryGetIntArg(args, "--timeout") ?? 90,
+        TryGetIntArg(args, "--max-entities") ?? 20,
+        TryGetIntArg(args, "--component-window") ?? 0x3000,
+        TryGetIntArg(args, "--object-window") ?? 0x1000,
+        TryGetIntArg(args, "--pointer-depth") ?? 2,
+        TryGetIntArg(args, "--max-children") ?? 4000,
+        TryGetIntArg(args, "--max-branches") ?? 32);
+
+if (HasFlag(args, "--monolith"))
+    return RunMonolith(process, reader);
+
+if (HasFlag(args, "--ritual-shop"))
+    return RunRitualShop(process, reader);
+
+if (HasFlag(args, "--atlas-mapname"))
+    return RunAtlasMapName(process, reader, TryGetIntArg(args, "--max") ?? 12);
+
+if (HasFlag(args, "--atlas-graph"))
+    return RunAtlasGraph(process, reader);
+
+if (HasFlag(args, "--atlas-current"))
+    return RunAtlasCurrent(process, reader);
+
+if (HasFlag(args, "--atlas-marker"))
+    return RunAtlasMarker(process, reader);
+
 if (HasFlag(args, "--mechanic-scan"))
     return RunMechanicScan(
         process,
@@ -74,6 +247,15 @@ if (HasFlag(args, "--component-layout-scan"))
         reader,
         HasFlag(args, "--mechanic-all"),
         TryGetIntArg(args, "--max-entities") ?? 100);
+
+if (HasFlag(args, "--mechanic-component-probe"))
+    return RunMechanicComponentProbe(
+        process,
+        reader,
+        HasFlag(args, "--mechanic-all"),
+        TryGetStringArg(args, "--component-filter"),
+        TryGetIntArg(args, "--max-entities") ?? 80,
+        TryGetIntArg(args, "--component-window") ?? 0x600);
 
 if (HasFlag(args, "--rarity"))
     return RunRarity(process, reader);
@@ -106,10 +288,50 @@ Console.WriteLine("  --aob                      scan for IngameState via AOB pat
 Console.WriteLine("  --atlas-probe [--atlas-child N] [--atlas-dump-node 0xADDR]  discover Atlas panel/node UI candidates");
 Console.WriteLine("  --atlas-snapshot [--atlas-samples N]  validate the Core Atlas snapshot reader");
 Console.WriteLine("  --atlas-rect-scan [--atlas-samples N]  scan Atlas nodes for final screen/client rect offsets");
+Console.WriteLine("  --entry-snapshot [--entry-all] [--max-entities N] [--ui-max N]");
+Console.WriteLine("                             one-shot awake/sleeping/UI/terrain snapshot for map-entry research");
+Console.WriteLine("  --rune-ui-probe [--ui-max N] [--context-children N]");
+Console.WriteLine("                             dump rune/Expedition UI anchors and local child strings");
+Console.WriteLine("  --runeforge-read [--win-w N] [--win-h N]");
+Console.WriteLine("                             read visible Runeshape Combinations reward rows via overlay parser");
+Console.WriteLine("  --runeforge-correlate [--win-w N] [--win-h N] [--ui-max N]");
+Console.WriteLine("                             correlate visible Runeforge rows with active controller/encounter stats");
+Console.WriteLine("  --runeforge-inventory-probe [--component-window N]");
+Console.WriteLine("                             decode controller Inventories vectors as item/inventory candidates");
+Console.WriteLine("  --runeforge-inventory-block-probe [--component-window N] [--entries N]");
+Console.WriteLine("                             dump repeated RuneEncounterController Inventories block vectors");
+Console.WriteLine("  --runeforge-inventory-block-watch [--timeout N] [--entries N]");
+Console.WriteLine("                             diff Inventories blocks before/after opening Runeshape");
+Console.WriteLine("  --runeforge-vector-probe [--object-window N] [--entries N]");
+Console.WriteLine("                             walk Expedition2Encounter reward-state vector suspects");
+Console.WriteLine("  --runeforge-vector-watch [--timeout N] [--object-window N]");
+Console.WriteLine("                             capture Expedition2Encounter vector deltas when Runeshape opens");
+Console.WriteLine("  --runeforge-ui-gate-probe [--max-children N] [--max-branches N]");
+Console.WriteLine("                             read-only Runeshape UI gate/path flags for write feasibility research");
+Console.WriteLine("  --runeforge-ui-child-watch [--timeout N] [--max-children N] [--field-window N]");
+Console.WriteLine("                             watch the real Runeshape catalog container populate when the panel opens");
+Console.WriteLine("  --runeforge-ui-populate-timeline [--timeout N] [--poll-ms N]");
+Console.WriteLine("                             timestamp catalog population vs fields +0x2E8/+0x2F0");
+Console.WriteLine("  --runeforge-ui-latch-write-test --confirm-write [--timeout N] [--poll-ms N]");
+Console.WriteLine("                             guarded write test for catalog +0x2E8/+0x2F0; restores originals");
+Console.WriteLine("  --runeforge-selection-source-probe [--field-window N] [--max-entities N]");
+Console.WriteLine("                             after Runeshape opens, search UI/entities for selected reward indexes");
+Console.WriteLine("  --runeforge-entry-key-scan [--component-window N] [--object-window N]");
+Console.WriteLine("                             scan Runeforge entities for recipe-key strings before opening Runeshape");
+Console.WriteLine("  --runeforge-selection-index-watch [--timeout N] [--component-window N]");
+Console.WriteLine("                             snapshot Runeforge components before open, then test visible row indexes after open");
+Console.WriteLine("  --monolith                 validate Sikaka v0.14.x Runeshape monolith station/reward catalog path");
+Console.WriteLine("  --ritual-shop              read visible Ritual tribute-shop reward tiles via UiElement item slot");
+Console.WriteLine("  --atlas-mapname [--max N]  verify localized Atlas map names from WorldAreas rows");
+Console.WriteLine("  --atlas-graph              validate live Atlas node graph/path data");
+Console.WriteLine("  --atlas-current            print the current Atlas node resolved by the marker reader");
+Console.WriteLine("  --atlas-marker             alias of --atlas-current for marker validation");
 Console.WriteLine("  --mechanic-scan [--seconds N] [--interval-ms N] [--mechanic-all]");
 Console.WriteLine("                             watch awake/sleeping mechanic entities and terrain clues");
 Console.WriteLine("  --component-layout-scan [--mechanic-all] [--max-entities N]");
 Console.WriteLine("                             discover StateMachine tables and magic-property mod vectors");
+Console.WriteLine("  --mechanic-component-probe [--component-filter term[,term]] [--component-window N]");
+Console.WriteLine("                             dump component addresses plus string/vector clues for mechanic research");
 return 0;
 
 // ── PoE2 entity / component-map probe ──────────────────────────────────────
@@ -822,6 +1044,820 @@ static bool LooksLikeMechanicTerrain(string path)
     return LooksLikeMechanic(path);
 }
 
+static int RunEntrySnapshot(
+    ProcessHandle process,
+    MemoryReader reader,
+    bool includeAllDetails,
+    int maxEntities,
+    int uiMax)
+{
+    maxEntities = Math.Clamp(maxEntities, 100, 50000);
+    uiMax = Math.Clamp(uiMax, 0, 50000);
+
+    var (gameState, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Map entry snapshot");
+    Console.WriteLine("------------------");
+    Console.WriteLine($"GameState    : 0x{gameState:X16}");
+    Console.WriteLine($"InGameState  : 0x{inGameState:X16}");
+    Console.WriteLine($"AreaInstance : 0x{areaInstance:X16}");
+    PrintAreaInfo(reader, areaInstance);
+    var playerGrid = ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine(playerGrid.HasValue
+        ? $"Player grid  : {playerGrid.Value.X:F1},{playerGrid.Value.Y:F1}"
+        : "Player grid  : unavailable");
+
+    PrintMapHeader(reader, areaInstance, Poe2.AreaInstance.SleepingEntities, "sleeping");
+    PrintMapHeader(reader, areaInstance, Poe2.AreaInstance.AwakeEntities, "awake");
+    PrintMechanicTerrainCandidates(reader, areaInstance);
+
+    var rows = new List<EntrySnapshotRow>();
+    AddEntryRows(reader, areaInstance, Poe2.AreaInstance.SleepingEntities, "sleeping", playerGrid, includeAllDetails, maxEntities, rows);
+    AddEntryRows(reader, areaInstance, Poe2.AreaInstance.AwakeEntities, "awake", playerGrid, includeAllDetails, maxEntities, rows);
+
+    Console.WriteLine();
+    Console.WriteLine("Entity summary");
+    Console.WriteLine("--------------");
+    Console.WriteLine($"Rows captured : {rows.Count} ({(includeAllDetails ? "all loaded entities" : "mechanic/rune-looking details")})");
+    foreach (var group in rows.GroupBy(r => (r.Source, r.Kind))
+                 .OrderBy(g => g.Key.Source)
+                 .ThenByDescending(g => g.Count()))
+        Console.WriteLine($"  {group.Key.Source,-8} {group.Key.Kind,-14} {group.Count(),4}");
+
+    Console.WriteLine();
+    Console.WriteLine("Entity details");
+    Console.WriteLine("--------------");
+    if (rows.Count == 0)
+    {
+        Console.WriteLine("No matching entity details. Re-run with --entry-all to dump all loaded entities.");
+    }
+    else
+    {
+        foreach (var row in rows
+                     .OrderBy(r => r.Source)
+                     .ThenBy(r => r.Kind, StringComparer.Ordinal)
+                     .ThenBy(r => r.Distance ?? float.MaxValue)
+                     .ThenBy(r => r.Id)
+                     .Take(maxEntities))
+        {
+            var grid = row.Grid.HasValue ? $" grid={row.Grid.Value.X:F1},{row.Grid.Value.Y:F1}" : "";
+            var dist = row.Distance.HasValue ? $" dist={row.Distance.Value:F1}" : "";
+            var state = row.StateValues.Length > 0 ? $" sm=[{row.StateValues}]" : "";
+            var icon = row.IconComplete.HasValue ? $" iconState={row.IconComplete}" : "";
+            Console.WriteLine(
+                $"  {row.Source,-8} {row.Kind,-14} id={row.Id,-10} addr=0x{row.Address:X16}" +
+                $"{grid}{dist}{icon}{state} comps=[{row.Components}] {row.Metadata}");
+        }
+    }
+
+    PrintEntryUiTextClues(reader, inGameState, uiMax);
+
+    Console.WriteLine();
+    Console.WriteLine("Suggested validation flow");
+    Console.WriteLine("  1. Run immediately after entering the map.");
+    Console.WriteLine("  2. Run again after moving near a mechanic.");
+    Console.WriteLine("  3. Run again after completing it.");
+    Console.WriteLine("Compare ids/source/kind/state to separate preloaded content from radius-spawned content.");
+    return 0;
+}
+
+static void AddEntryRows(
+    MemoryReader reader,
+    nint areaInstance,
+    int mapOffset,
+    string source,
+    System.Numerics.Vector2? playerGrid,
+    bool includeAllDetails,
+    int maxEntities,
+    List<EntrySnapshotRow> rows)
+{
+    var added = 0;
+    foreach (var (id, address, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+    {
+        if (!includeAllDetails && !LooksLikeEntryInteresting(metadata)) continue;
+        if (++added > maxEntities) break;
+
+        var grid = ReadEntityGrid(reader, address);
+        var distance = playerGrid.HasValue && grid.HasValue
+            ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+            : (float?)null;
+
+        var components = ReadComponentNames(reader, address);
+        var icon = ResolveComponentAddr(reader, address, "MinimapIcon");
+        int? iconComplete = null;
+        if (icon != 0 && reader.TryReadStruct<int>(icon + Poe2.MinimapIcon.CompletedState, out var iconState))
+            iconComplete = iconState;
+        var stateMachine = ResolveComponentAddr(reader, address, "StateMachine");
+        var stateValues = stateMachine == 0 ? "" : ReadPrimaryStateMachineValues(reader, stateMachine);
+
+        rows.Add(new EntrySnapshotRow(
+            source,
+            GuessEntryKind(metadata),
+            id,
+            address,
+            metadata,
+            grid,
+            distance,
+            string.Join(',', components),
+            iconComplete,
+            stateValues));
+    }
+}
+
+static void PrintMapHeader(MemoryReader reader, nint areaInstance, int mapOffset, string label)
+{
+    var head = SafePtr(reader, areaInstance + mapOffset);
+    var size = 0;
+    if (head != 0)
+        reader.TryReadStruct<int>(areaInstance + mapOffset + 8, out size);
+    Console.WriteLine($"{label,-12}: offset=+0x{mapOffset:X} size={size} head=0x{head:X16}");
+}
+
+static void PrintAreaInfo(MemoryReader reader, nint areaInstance)
+{
+    var (code, name, level, hash) = ReadAreaSnapshot(reader, areaInstance);
+    Console.WriteLine($"AreaInfo     : code='{code}' name='{name}' level={level} hash=0x{hash:X8}");
+}
+
+static (string Code, string Name, int Level, uint Hash) ReadAreaSnapshot(MemoryReader reader, nint areaInstance)
+{
+    var areaInfo = SafePtr(reader, areaInstance + Poe2.AreaInstance.AreaInfoPtr);
+    var text = SafePtr(reader, areaInfo);
+    var code = text == 0 ? "" : reader.ReadStringUtf16(text, 96);
+    var name = "";
+    if (text != 0 && code.Length > 0)
+        name = reader.ReadStringUtf16(text + (nint)((code.Length + 1) * 2), 96);
+    reader.TryReadStruct<int>(areaInstance + Poe2.AreaInstance.CurrentAreaLevel, out var level);
+    reader.TryReadStruct<uint>(areaInstance + Poe2.AreaInstance.CurrentAreaHash, out var hash);
+    return (code, name, level, hash);
+}
+
+static IReadOnlyList<string> ReadComponentNames(MemoryReader reader, nint entity)
+{
+    var result = new List<string>();
+    var details = SafePtr(reader, entity + Poe2.Entity.EntityDetailsPtr);
+    if (details == 0) return result;
+    var lookup = SafePtr(reader, details + Poe2.EntityDetails.ComponentLookUpPtr);
+    if (lookup == 0) return result;
+    var first = SafePtr(reader, lookup + Poe2.ComponentLookUp.NameAndIndexBucket);
+    if (first == 0 ||
+        !reader.TryReadStruct<nint>(lookup + Poe2.ComponentLookUp.NameAndIndexBucket + 8, out var last))
+        return result;
+    var entries = ((long)last - (long)first) / Poe2.ComponentLookUp.EntryStride;
+    if (entries is <= 0 or > 256) return result;
+    for (long i = 0; i < entries; i++)
+    {
+        var entry = first + (nint)(i * Poe2.ComponentLookUp.EntryStride);
+        var name = reader.ReadStringUtf8(SafePtr(reader, entry), 48);
+        if (!string.IsNullOrWhiteSpace(name)) result.Add(name);
+    }
+    result.Sort(StringComparer.Ordinal);
+    return result;
+}
+
+static bool LooksLikeEntryInteresting(string value)
+{
+    if (LooksLikeMechanic(value)) return true;
+    ReadOnlySpan<string> terms =
+    [
+        "Rune", "Runeshape", "Runeforge", "Verisium", "Expedition2Encounter",
+        "MapContent", "League", "Encounter", "Reward", "Chest"
+    ];
+    foreach (var term in terms)
+        if (value.Contains(term, StringComparison.OrdinalIgnoreCase))
+            return true;
+    return false;
+}
+
+static string GuessEntryKind(string metadata)
+{
+    ReadOnlySpan<(string Term, string Kind)> terms =
+    [
+        ("Runeshape", "rune"),
+        ("Runeforge", "rune"),
+        ("Rune", "rune"),
+        ("Verisium", "verisium"),
+        ("Expedition", "expedition"),
+        ("Ritual", "ritual"),
+        ("Breach", "breach"),
+        ("Brequel", "breach"),
+        ("Abyss", "abyss"),
+        ("Essence", "essence"),
+        ("Shrine", "shrine"),
+        ("Strongbox", "strongbox"),
+        ("RogueExile", "rogue-exile"),
+        ("AtlasExile", "rogue-exile"),
+        ("Delirium", "delirium"),
+        ("Encounter", "encounter"),
+        ("League", "league"),
+        ("Chest", "chest")
+    ];
+    foreach (var (term, kind) in terms)
+        if (metadata.Contains(term, StringComparison.OrdinalIgnoreCase))
+            return kind;
+    if (metadata.Contains("/Monsters/", StringComparison.OrdinalIgnoreCase)) return "monster";
+    if (metadata.Contains("/Terrain/", StringComparison.OrdinalIgnoreCase)) return "terrain";
+    return "other";
+}
+
+static void PrintEntryUiTextClues(MemoryReader reader, nint inGameState, int maxElements)
+{
+    if (maxElements <= 0) return;
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine("UI text clues : unavailable");
+        return;
+    }
+
+    var elements = WalkUiSubtree(reader, uiRoot, maxElements, out _, out _);
+    var hits = new Dictionary<string, (int Count, nint Element, int Offset)>(StringComparer.OrdinalIgnoreCase);
+    foreach (var el in elements)
+    {
+        for (var offset = 0; offset <= 0x2C0; offset += 8)
+        {
+            var text = ReadStdWString(reader, el + offset);
+            if (text.Length < 3 || text.Length > 120) continue;
+            if (!LooksLikeEntryInteresting(text)) continue;
+            var clean = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            var old = hits.GetValueOrDefault(clean);
+            hits[clean] = (old.Count + 1, old.Element == 0 ? el : old.Element, old.Element == 0 ? offset : old.Offset);
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("UI text clues");
+    Console.WriteLine("-------------");
+    Console.WriteLine($"UI elements scanned: {elements.Count}");
+    if (hits.Count == 0)
+    {
+        Console.WriteLine("No rune/mechanic-looking UI text found.");
+        return;
+    }
+    foreach (var (text, hit) in hits
+                 .OrderByDescending(x => x.Value.Count)
+                 .ThenBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+                 .Take(80))
+        Console.WriteLine($"  count={hit.Count,3} el=0x{hit.Element:X16}+0x{hit.Offset:X3}  {text}");
+}
+
+static int RunRuneUiProbe(
+    ProcessHandle process,
+    MemoryReader reader,
+    int maxElements,
+    int contextChildren)
+{
+    maxElements = Math.Clamp(maxElements, 500, 50000);
+    contextChildren = Math.Clamp(contextChildren, 0, 64);
+
+    var (_, inGameState, areaInstance, _) = ResolveChain(process, reader);
+    if (inGameState == 0 || areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.Error.WriteLine("UiRoot is unavailable.");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Rune / Expedition UI probe");
+    Console.WriteLine("--------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"UiRoot       : 0x{uiRoot:X16}");
+    Console.WriteLine($"Scan cap     : {maxElements} UI elements");
+    Console.WriteLine("Goal         : find text/data neighborhoods for available map-entry rune rewards.");
+    Console.WriteLine();
+
+    var elements = WalkUiSubtree(reader, uiRoot, maxElements, out var parents, out var childIndexes);
+    var hits = new List<(nint Element, int Offset, string Text)>();
+    foreach (var el in elements)
+    {
+        foreach (var (offset, text) in ReadUiStrings(reader, el))
+        {
+            if (IsRuneUiProbeHit(text))
+                hits.Add((el, offset, text));
+        }
+    }
+
+    Console.WriteLine($"Elements scanned : {elements.Count}");
+    Console.WriteLine($"Anchor hits      : {hits.Count}");
+    if (hits.Count == 0)
+    {
+        Console.WriteLine("No Expedition/rune UI anchors found. Open/hover the map-content or rune UI and retry.");
+        return 0;
+    }
+
+    foreach (var hit in hits
+                 .GroupBy(h => (h.Element, h.Text), h => h.Offset)
+                 .Select(g => (g.Key.Element, Offset: g.Min(), g.Key.Text))
+                 .OrderBy(h => h.Text, StringComparer.OrdinalIgnoreCase)
+                 .ThenBy(h => h.Element)
+                 .Take(24))
+    {
+        Console.WriteLine();
+        Console.WriteLine($"ANCHOR 0x{hit.Element:X16}+0x{hit.Offset:X3}  {hit.Text}");
+        Console.WriteLine($"  visible={ReadUiVisible(reader, hit.Element)} children={TryGetUiChildCount(reader, hit.Element)} path={UiPath(hit.Element, parents, childIndexes)}");
+
+        if (parents.TryGetValue(hit.Element, out var parent) && parent != 0)
+        {
+            Console.WriteLine($"  parent 0x{parent:X16} visible={ReadUiVisible(reader, parent)} children={TryGetUiChildCount(reader, parent)}");
+            PrintUiStringBlock(reader, parent, "    parent text");
+        }
+
+        PrintUiStringBlock(reader, hit.Element, "    anchor text");
+
+        var children = ReadUiChildren(reader, hit.Element, contextChildren);
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            var strings = ReadUiStrings(reader, child).ToArray();
+            if (strings.Length == 0 && TryGetUiChildCount(reader, child) == 0) continue;
+            Console.WriteLine($"    child[{i}] 0x{child:X16} visible={ReadUiVisible(reader, child)} children={TryGetUiChildCount(reader, child)}");
+            foreach (var (offset, text) in strings.Take(16))
+                Console.WriteLine($"      +0x{offset:X3} {text}");
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Next step: if no reward names appear, rerun while hovering/opening the rune/Expedition reward UI.");
+    return 0;
+}
+
+static IEnumerable<(int Offset, string Text)> ReadUiStrings(MemoryReader reader, nint element)
+{
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    for (var offset = 0; offset <= 0x420; offset += 8)
+    {
+        var text = ReadStdWString(reader, element + offset);
+        if (text.Length < 2 || text.Length > 160) continue;
+        var clean = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (clean.Length < 2 || !seen.Add(clean)) continue;
+        yield return (offset, clean);
+    }
+}
+
+static bool IsRuneUiProbeHit(string text)
+{
+    ReadOnlySpan<string> terms =
+    [
+        "ExpeditionCurrencySummaryDisplay",
+        "verisium_smithing_window",
+        "Expedition2Encounter",
+        "Runeshape",
+        "Runeforge",
+        "Rune",
+        "Verisium",
+        "Broken Circle",
+        "Stone Circle",
+        "Exotic Coinage",
+        "Artifact",
+        "Logbook",
+    ];
+    foreach (var term in terms)
+        if (text.Contains(term, StringComparison.OrdinalIgnoreCase))
+            return true;
+    return false;
+}
+
+static void PrintUiStringBlock(MemoryReader reader, nint element, string label)
+{
+    var strings = ReadUiStrings(reader, element).Take(24).ToArray();
+    if (strings.Length == 0) return;
+    Console.WriteLine(label + ":");
+    foreach (var (offset, text) in strings)
+        Console.WriteLine($"      +0x{offset:X3} {text}");
+}
+
+static string UiPath(
+    nint element,
+    Dictionary<nint, nint> parents,
+    Dictionary<nint, int> childIndexes)
+{
+    var parts = new List<string>();
+    var cur = element;
+    var guard = 0;
+    while (cur != 0 && guard++ < 24)
+    {
+        var index = childIndexes.GetValueOrDefault(cur, -1);
+        parts.Add(index >= 0 ? index.ToString() : "root");
+        if (!parents.TryGetValue(cur, out cur)) break;
+    }
+    parts.Reverse();
+    return string.Join('/', parts);
+}
+
+static int RunRuneforgeRead(
+    ProcessHandle process,
+    MemoryReader reader,
+    int winW,
+    int winH)
+{
+    winW = Math.Clamp(winW, 640, 10000);
+    winH = Math.Clamp(winH, 480, 10000);
+
+    var (_, inGameState, areaInstance, _) = ResolveChain(process, reader);
+    if (inGameState == 0 || areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge reward reader");
+    Console.WriteLine("-----------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Window size : {winW}x{winH}");
+    Console.WriteLine("Source      : Poe2Runeforge, visible row kid[0]+0x390");
+
+    var runeforge = new Poe2Runeforge(reader);
+    var rewards = runeforge.ReadRewards(inGameState, winW, winH);
+    Console.WriteLine($"Panel open  : {runeforge.PanelOpen}");
+    Console.WriteLine($"Rows read   : {rewards.Count}");
+    if (rewards.Count == 0)
+    {
+        Console.WriteLine("No rows read. Open the Runeshape Combinations panel and retry.");
+        return 0;
+    }
+
+    for (var i = 0; i < rewards.Count; i++)
+    {
+        var r = rewards[i];
+        Console.WriteLine(
+            $"  row[{i}] count={r.Count,-3} name='{r.Name}' rect=({r.X:F1},{r.Y:F1},{r.W:F1},{r.H:F1})");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("If these names match the panel, the overlay can price them when Show Runeforge values is enabled.");
+    return 0;
+}
+
+static int RunRuneforgeCorrelate(
+    ProcessHandle process,
+    MemoryReader reader,
+    int winW,
+    int winH,
+    int uiMax)
+{
+    winW = Math.Clamp(winW, 640, 10000);
+    winH = Math.Clamp(winH, 480, 10000);
+    uiMax = Math.Clamp(uiMax, 1000, 60000);
+
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (inGameState == 0 || areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+    var area = ReadAreaSnapshot(reader, areaInstance);
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge reward correlation probe");
+    Console.WriteLine("----------------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Window size : {winW}x{winH}");
+    Console.WriteLine($"UI scan cap : {uiMax}");
+    Console.WriteLine("Goal        : visible reward text -> UI row address -> active controller/encounter stats.");
+
+    var runeforge = new Poe2Runeforge(reader);
+    var rewards = runeforge.ReadRewards(inGameState, winW, winH);
+    Console.WriteLine();
+    Console.WriteLine($"Panel open  : {runeforge.PanelOpen}");
+    Console.WriteLine($"Rows read   : {rewards.Count}");
+    if (rewards.Count == 0)
+    {
+        Console.WriteLine("No visible Runeshape rows. Continuing with hidden UI/entity scan for map-entry research.");
+        PrintRuneforgeUiTextHints(reader, inGameState, uiMax);
+        var closedPanelRows = PrintRuneforgeEntityCorrelation(reader, areaInstance, localPlayer);
+        PrintRuneforgeMachineSample(area, rewards, closedPanelRows);
+        return 0;
+    }
+
+    for (var i = 0; i < rewards.Count; i++)
+    {
+        var r = rewards[i];
+        Console.WriteLine(
+            $"  row[{i,2}] count={r.Count,-3} name='{r.Name}' key='{RewardKey(r.Name)}' rect=({r.X:F1},{r.Y:F1},{r.W:F1},{r.H:F1})");
+    }
+
+    PrintRuneforgeUiRowMatches(reader, inGameState, rewards, uiMax);
+    var compactRows = PrintRuneforgeEntityCorrelation(reader, areaInstance, localPlayer);
+    PrintRuneforgeMachineSample(area, rewards, compactRows);
+    return 0;
+}
+
+static void PrintRuneforgeUiTextHints(MemoryReader reader, nint inGameState, int uiMax)
+{
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    Console.WriteLine();
+    Console.WriteLine("Rune-looking UI text while panel is closed/empty");
+    Console.WriteLine("-----------------------------------------------");
+    if (uiRoot == 0)
+    {
+        Console.WriteLine("UiRoot unavailable.");
+        return;
+    }
+
+    var elements = WalkUiSubtree(reader, uiRoot, uiMax, out var parents, out var childIndexes);
+    var hits = new List<(nint Element, int Offset, string Text)>();
+    foreach (var el in elements)
+    {
+        foreach (var (offset, text) in ReadUiStrings(reader, el))
+        {
+            if (LooksLikeRuneforgeRewardText(text))
+                hits.Add((el, offset, text));
+        }
+    }
+
+    Console.WriteLine($"UI elements scanned: {elements.Count}");
+    Console.WriteLine($"Candidate strings  : {hits.Count}");
+    foreach (var hit in hits
+                 .GroupBy(h => h.Text, StringComparer.OrdinalIgnoreCase)
+                 .Select(g => g.OrderBy(h => UiPath(h.Element, parents, childIndexes), StringComparer.Ordinal).First())
+                 .OrderBy(h => h.Text, StringComparer.OrdinalIgnoreCase)
+                 .Take(80))
+    {
+        Console.WriteLine(
+            $"  el=0x{hit.Element:X16}+0x{hit.Offset:X3} visible={ReadUiVisible(reader, hit.Element),-5} " +
+            $"children={TryGetUiChildCount(reader, hit.Element),3} path={UiPath(hit.Element, parents, childIndexes)} text='{hit.Text}'");
+    }
+}
+
+static bool LooksLikeRuneforgeRewardText(string text)
+{
+    if (text.Length is < 5 or > 120) return false;
+    if (text.Contains("Runeshape", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("Runeforge", StringComparison.OrdinalIgnoreCase))
+        return true;
+
+    if (text.Contains("Rune of ", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("Greater ", StringComparison.OrdinalIgnoreCase) && text.Contains(" Orb", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("Perfect ", StringComparison.OrdinalIgnoreCase) && text.Contains(" Orb", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("Uncut ", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("Soul Core", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("Alloy", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("Flux", StringComparison.OrdinalIgnoreCase))
+        return true;
+
+    return false;
+}
+
+static void PrintRuneforgeUiRowMatches(
+    MemoryReader reader,
+    nint inGameState,
+    IReadOnlyList<Poe2Runeforge.RuneReward> rewards,
+    int uiMax)
+{
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    Console.WriteLine();
+    Console.WriteLine("Visible reward UI label candidates");
+    Console.WriteLine("----------------------------------");
+    if (uiRoot == 0)
+    {
+        Console.WriteLine("UiRoot unavailable.");
+        return;
+    }
+
+    var elements = WalkUiSubtree(reader, uiRoot, uiMax, out var parents, out var childIndexes);
+    var allText = new List<(nint Element, int Offset, string Text)>();
+    foreach (var el in elements)
+        foreach (var (offset, text) in ReadUiStrings(reader, el))
+            allText.Add((el, offset, text));
+
+    Console.WriteLine($"UI elements scanned: {elements.Count}");
+    for (var i = 0; i < rewards.Count; i++)
+    {
+        var reward = rewards[i];
+        var exact = $"{reward.Count}x {reward.Name}";
+        var key = RewardKey(reward.Name);
+        var exactMatches = allText
+            .Where(t => string.Equals(t.Text, exact, StringComparison.OrdinalIgnoreCase))
+            .Take(6)
+            .ToArray();
+        var fuzzyMatches = allText
+            .Where(t => !string.Equals(t.Text, exact, StringComparison.OrdinalIgnoreCase) &&
+                        RewardKey(t.Text).Contains(key, StringComparison.OrdinalIgnoreCase))
+            .Take(4)
+            .ToArray();
+        var matches = exactMatches.Concat(fuzzyMatches).ToArray();
+        Console.WriteLine($"  row[{i,2}] '{exact}' exact={exactMatches.Length} fuzzy={fuzzyMatches.Length}");
+        foreach (var match in matches)
+        {
+            var parent = parents.GetValueOrDefault(match.Element);
+            Console.WriteLine(
+                $"    el=0x{match.Element:X16}+0x{match.Offset:X3} visible={ReadUiVisible(reader, match.Element),-5} " +
+                $"children={TryGetUiChildCount(reader, match.Element),3} path={UiPath(match.Element, parents, childIndexes)} text='{match.Text}'");
+            if (parent != 0)
+            {
+                var siblingText = ReadUiChildren(reader, parent, 16)
+                    .SelectMany(child => ReadUiStrings(reader, child).Take(4).Select(s => s.Text))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Take(8);
+                Console.WriteLine($"      parent=0x{parent:X16} siblings=[{string.Join(" | ", siblingText)}]");
+            }
+        }
+    }
+}
+
+static IReadOnlyList<(string Source, uint Id, string Kind, string Distance, string Grid, string State, string Local, string Changed, string Metadata)>
+    PrintRuneforgeEntityCorrelation(MemoryReader reader, nint areaInstance, nint localPlayer)
+{
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    var rows = new List<(string Source, uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float? Dist)>();
+    foreach (var (source, mapOffset) in new[]
+             {
+                 ("sleeping", Poe2.AreaInstance.SleepingEntities),
+                 ("awake", Poe2.AreaInstance.AwakeEntities)
+             })
+    {
+        foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+        {
+            if (!metadata.Contains("Expedition2", StringComparison.OrdinalIgnoreCase) &&
+                !metadata.Contains("LeagueExpeditionNew", StringComparison.OrdinalIgnoreCase) &&
+                !metadata.Contains("RuneEncounterController", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var grid = ReadEntityGrid(reader, entity);
+            var dist = playerGrid.HasValue && grid.HasValue
+                ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+                : (float?)null;
+            rows.Add((source, id, entity, metadata, grid, dist));
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Rune/Expedition entity correlation");
+    Console.WriteLine("----------------------------------");
+    if (rows.Count == 0)
+    {
+        Console.WriteLine("No Rune/Expedition entities found.");
+        return [];
+    }
+
+    var orderedRows = rows.OrderBy(r => r.Dist ?? float.MaxValue).ThenBy(r => r.Id).ToArray();
+    var compactRows = PrintRuneforgeCompactSample(reader, orderedRows);
+
+    foreach (var row in orderedRows)
+    {
+        Console.WriteLine();
+        Console.WriteLine(
+            $"ENTITY {row.Source,-8} id={row.Id,-10} addr=0x{row.Entity:X16} " +
+            $"grid={FormatGrid(row.Grid),-15} dist={FormatDistance(row.Dist),6} {row.Metadata}");
+
+        var components = ReadComponentMap(reader, row.Entity);
+        Console.WriteLine($"  components=[{string.Join(", ", components.Select(c => c.Name))}]");
+
+        var stateMachine = components.FirstOrDefault(c => c.Name == "StateMachine").Address;
+        if (stateMachine != 0)
+        {
+            Console.WriteLine($"  StateMachine @ 0x{stateMachine:X16}");
+            PrintStateMachineCandidates(reader, stateMachine);
+        }
+
+        var stats = components.FirstOrDefault(c => c.Name == "Stats").Address;
+        if (stats != 0)
+        {
+            Console.WriteLine($"  Stats @ 0x{stats:X16}");
+            PrintStatsVectorFull(reader, stats + Poe2.StatsComponent.ItemLocalStatsVec, "ItemLocalStats");
+            var statsChanged = SafePtr(reader, stats + Poe2.StatsComponent.StatsChangedByItemsPtr);
+            if (statsChanged != 0)
+                PrintStatsVectorFull(reader, statsChanged + Poe2.StatsComponent.StatsStructStatsVec, "ChangedByItems.Stats");
+        }
+    }
+
+    return compactRows;
+}
+
+static IReadOnlyList<(string Source, uint Id, string Kind, string Distance, string Grid, string State, string Local, string Changed, string Metadata)>
+    PrintRuneforgeCompactSample(
+    MemoryReader reader,
+    IReadOnlyList<(string Source, uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float? Dist)> rows)
+{
+    Console.WriteLine();
+    Console.WriteLine("Compact stat signatures");
+    Console.WriteLine("-----------------------");
+    var compactRows = new List<(string Source, uint Id, string Kind, string Distance, string Grid, string State, string Local, string Changed, string Metadata)>();
+    foreach (var row in rows)
+    {
+        var stats = ResolveComponentAddr(reader, row.Entity, "Stats");
+        var stateMachine = ResolveComponentAddr(reader, row.Entity, "StateMachine");
+        var changed = stats == 0 ? [] : ReadStatsChangedByItems(reader, stats);
+        var local = stats == 0 ? [] : ReadStatsLocal(reader, stats);
+        var state = stateMachine == 0 ? "" : ReadPrimaryStateMachineValues(reader, stateMachine);
+        var kind = CompactKind(row.Metadata);
+        var distance = FormatDistance(row.Dist);
+        var grid = FormatGrid(row.Grid);
+        var localText = FormatStats(local);
+        var changedText = FormatStats(changed);
+        compactRows.Add((row.Source, row.Id, kind, distance, grid, state, localText, changedText, row.Metadata));
+        Console.WriteLine(
+            $"  SAMPLE id={row.Id} kind={kind} dist={distance} " +
+            $"grid={grid} state=[{state}] local=[{localText}] changed=[{changedText}]");
+    }
+
+    return compactRows;
+}
+
+static void PrintRuneforgeMachineSample(
+    (string Code, string Name, int Level, uint Hash) area,
+    IReadOnlyList<Poe2Runeforge.RuneReward> rewards,
+    IReadOnlyList<(string Source, uint Id, string Kind, string Distance, string Grid, string State, string Local, string Changed, string Metadata)> compactRows)
+{
+    Console.WriteLine();
+    Console.WriteLine("Copyable correlation sample");
+    Console.WriteLine("---------------------------");
+    var rewardText = string.Join(" || ", rewards.Select(r => $"{r.Count}x {SampleEscape(r.Name)}"));
+    var entityText = string.Join(" || ", compactRows.Select(r =>
+        $"{r.Kind}#{r.Id}@{r.Source} dist={r.Distance} grid={SampleEscape(r.Grid)} state=[{r.State}] local=[{r.Local}] changed=[{r.Changed}] meta={SampleEscape(r.Metadata)}"));
+    Console.WriteLine(
+        $"RUNEFORGE_SAMPLE area={SampleEscape(area.Code)} name={SampleEscape(area.Name)} level={area.Level} hash=0x{area.Hash:X8} " +
+        $"rewards=[{rewardText}] entities=[{entityText}]");
+}
+
+static string SampleEscape(string value) =>
+    value.Replace("\\", "\\\\", StringComparison.Ordinal)
+         .Replace("[", "\\[", StringComparison.Ordinal)
+         .Replace("]", "\\]", StringComparison.Ordinal)
+         .Replace("|", "\\|", StringComparison.Ordinal);
+
+static List<(int Id, int Value)> ReadStatsLocal(MemoryReader reader, nint stats)
+{
+    if (!reader.TryReadStruct<StdVector>(stats + Poe2.StatsComponent.ItemLocalStatsVec, out var vector) ||
+        !TryGetVectorCount(vector, Poe2.StatsComponent.StatArrayStride, 1, 2048, out var count))
+        return [];
+    return ReadStatsEntries(reader, vector, count);
+}
+
+static List<(int Id, int Value)> ReadStatsChangedByItems(MemoryReader reader, nint stats)
+{
+    var statsChanged = SafePtr(reader, stats + Poe2.StatsComponent.StatsChangedByItemsPtr);
+    if (statsChanged == 0 ||
+        !reader.TryReadStruct<StdVector>(statsChanged + Poe2.StatsComponent.StatsStructStatsVec, out var vector) ||
+        !TryGetVectorCount(vector, Poe2.StatsComponent.StatArrayStride, 1, 2048, out var count))
+        return [];
+    return ReadStatsEntries(reader, vector, count);
+}
+
+static string FormatStats(IReadOnlyList<(int Id, int Value)> stats) =>
+    stats.Count == 0 ? "" : string.Join(';', stats.Select(e => $"{e.Id}:{e.Value}"));
+
+static string CompactKind(string metadata)
+{
+    if (metadata.Contains("RuneEncounterController", StringComparison.OrdinalIgnoreCase)) return "controller";
+    if (metadata.Contains("Expedition2Encounter", StringComparison.OrdinalIgnoreCase)) return "encounter";
+    if (metadata.Contains("HiddenEncounterChest", StringComparison.OrdinalIgnoreCase)) return "reward-chest";
+    return GuessEntryKind(metadata);
+}
+
+static void PrintStatsVectorFull(MemoryReader reader, nint vectorAddress, string label)
+{
+    if (!reader.TryReadStruct<StdVector>(vectorAddress, out var vector) ||
+        !TryGetVectorCount(vector, Poe2.StatsComponent.StatArrayStride, 1, 2048, out var count))
+        return;
+
+    var entries = ReadStatsEntries(reader, vector, count);
+    Console.WriteLine($"    STATS {label,-20} count={entries.Count}");
+    foreach (var chunk in entries.Chunk(8))
+        Console.WriteLine($"      {string.Join(", ", chunk.Select(e => $"{e.Id}:{e.Value}"))}");
+}
+
+static List<(int Id, int Value)> ReadStatsEntries(MemoryReader reader, StdVector vector, int count)
+{
+    var result = new List<(int Id, int Value)>(Math.Min(count, 2048));
+    for (var i = 0; i < count; i++)
+    {
+        if (!reader.TryReadStruct<int>(vector.First + i * Poe2.StatsComponent.StatArrayStride, out var id) ||
+            !reader.TryReadStruct<int>(vector.First + i * Poe2.StatsComponent.StatArrayStride + 4, out var value))
+            break;
+        result.Add((id, value));
+    }
+    return result;
+}
+
+static string RewardKey(string value)
+{
+    Span<char> buffer = stackalloc char[Math.Min(value.Length, 160)];
+    var n = 0;
+    foreach (var ch in value)
+    {
+        if (n >= buffer.Length) break;
+        if (char.IsLetterOrDigit(ch))
+            buffer[n++] = char.ToLowerInvariant(ch);
+    }
+    return new string(buffer[..n]);
+}
+
 static void PrintMechanicEvent(string eventName, MechanicProbeEntity entity)
 {
     var complete = entity.IconComplete.HasValue ? $" iconState={entity.IconComplete}" : "";
@@ -915,6 +1951,4074 @@ static int RunComponentLayoutScan(
         Console.WriteLine("No 64-byte mod vector decoded. Test near an Essence rare or other modified monster.");
     return 0;
 }
+
+static int RunMechanicComponentProbe(
+    ProcessHandle process,
+    MemoryReader reader,
+    bool includeAll,
+    string? filterText,
+    int maxEntities,
+    int componentWindow)
+{
+    var (_, _, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    maxEntities = Math.Clamp(maxEntities, 1, 5000);
+    componentWindow = Math.Clamp(componentWindow, 0x80, 0x4000);
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    var filters = ParseProbeFilters(filterText);
+    var explicitFilter = !string.IsNullOrWhiteSpace(filterText);
+
+    Console.WriteLine();
+    Console.WriteLine("Mechanic component probe");
+    Console.WriteLine("------------------------");
+    Console.WriteLine($"Area instance   : 0x{areaInstance:X16}");
+    Console.WriteLine($"Filter          : {(includeAll ? "all real entities" : string.Join(", ", filters))}");
+    Console.WriteLine($"Entity cap      : {maxEntities}");
+    Console.WriteLine($"Component window: 0x{componentWindow:X} bytes");
+    Console.WriteLine("Goal            : compare entry/open/completed logs to find current-map mechanic/reward state.");
+
+    var seen = new HashSet<uint>();
+    var scanned = 0;
+    foreach (var (source, mapOffset) in new[]
+             {
+                 ("sleeping", Poe2.AreaInstance.SleepingEntities),
+                 ("awake", Poe2.AreaInstance.AwakeEntities)
+             })
+    {
+        foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+        {
+            if (!seen.Add(id)) continue;
+            if (!includeAll)
+            {
+                var matchesFilter = MatchesAnyFilter(metadata, filters);
+                if (!matchesFilter && (explicitFilter || !LooksLikeMechanic(metadata))) continue;
+            }
+            if (++scanned > maxEntities) break;
+
+            var grid = ReadEntityGrid(reader, entity);
+            var distance = playerGrid.HasValue && grid.HasValue
+                ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+                : (float?)null;
+            var components = ReadComponentMap(reader, entity);
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"ENTITY {source,-8} id={id,-10} addr=0x{entity:X16} " +
+                $"grid={FormatGrid(grid),-15} dist={FormatDistance(distance),6} {metadata}");
+            Console.WriteLine($"  Components ({components.Count}):");
+            foreach (var (name, index, address) in components)
+                Console.WriteLine($"    [{index,2}] {name,-28} 0x{address:X16}");
+
+            foreach (var (name, _, address) in components)
+            {
+                if (address == 0) continue;
+                Console.WriteLine($"  COMPONENT {name} @ 0x{address:X16}");
+                if (name.Equals("StateMachine", StringComparison.Ordinal))
+                    PrintStateMachineCandidates(reader, address);
+                if (name.Equals("ObjectMagicProperties", StringComparison.Ordinal))
+                    PrintMagicPropertyCandidates(reader, address);
+                if (name.Equals("Stats", StringComparison.Ordinal))
+                    PrintStatsComponentClues(reader, address);
+                if (name.Equals("Inventories", StringComparison.Ordinal))
+                    PrintInventoryRewardClues(reader, address, componentWindow);
+
+                PrintComponentVectorClues(reader, address, componentWindow);
+                PrintComponentStringClues(reader, address, componentWindow);
+            }
+        }
+
+        if (scanned >= maxEntities) break;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Scanned {Math.Min(scanned, maxEntities)} entity/entities.");
+    Console.WriteLine("Recommended sequence:");
+    Console.WriteLine("  1. Run at map entry before touching Runeforge.");
+    Console.WriteLine("  2. Run again with Runeshape Combinations open.");
+    Console.WriteLine("  3. Run again after claiming/completing, then compare component clues.");
+    return 0;
+}
+
+static string[] ParseProbeFilters(string? filterText)
+{
+    if (string.IsNullOrWhiteSpace(filterText))
+        return
+        [
+            "Expedition2",
+            "LeagueExpeditionNew",
+            "Rune",
+            "Runeshape",
+            "Runeforge",
+            "Verisium"
+        ];
+
+    return filterText
+        .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(x => x.Length > 0)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+}
+
+static bool MatchesAnyFilter(string value, IReadOnlyList<string> filters)
+{
+    foreach (var filter in filters)
+        if (value.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            return true;
+    return false;
+}
+
+static IReadOnlyList<(string Name, int Index, nint Address)> ReadComponentMap(MemoryReader reader, nint entity)
+{
+    var result = new List<(string Name, int Index, nint Address)>();
+    var details = SafePtr(reader, entity + Poe2.Entity.EntityDetailsPtr);
+    if (details == 0) return result;
+    var lookup = SafePtr(reader, details + Poe2.EntityDetails.ComponentLookUpPtr);
+    if (lookup == 0) return result;
+    if (!reader.TryReadStruct<StdVector>(entity + Poe2.Entity.ComponentList, out var componentList) ||
+        !TryGetVectorCount(componentList, 8, 1, 256, out var componentCount))
+        return result;
+
+    var first = SafePtr(reader, lookup + Poe2.ComponentLookUp.NameAndIndexBucket);
+    if (first == 0 ||
+        !reader.TryReadStruct<nint>(lookup + Poe2.ComponentLookUp.NameAndIndexBucket + 8, out var last))
+        return result;
+    var entries = ((long)last - (long)first) / Poe2.ComponentLookUp.EntryStride;
+    if (entries is <= 0 or > 256) return result;
+
+    for (long i = 0; i < entries; i++)
+    {
+        var entry = first + (nint)(i * Poe2.ComponentLookUp.EntryStride);
+        var name = reader.ReadStringUtf8(SafePtr(reader, entry), 64);
+        if (!reader.TryReadStruct<int>(entry + 8, out var index) ||
+            string.IsNullOrWhiteSpace(name) ||
+            index < 0 ||
+            index >= componentCount)
+            continue;
+
+        var address = SafePtr(reader, componentList.First + (nint)(index * 8));
+        result.Add((name, index, address));
+    }
+
+    result.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
+    return result;
+}
+
+static void PrintStatsComponentClues(MemoryReader reader, nint component)
+{
+    PrintStatsVector(reader, component + Poe2.StatsComponent.ItemLocalStatsVec, "ItemLocalStats");
+    var statsChanged = SafePtr(reader, component + Poe2.StatsComponent.StatsChangedByItemsPtr);
+    if (statsChanged != 0)
+        PrintStatsVector(reader, statsChanged + Poe2.StatsComponent.StatsStructStatsVec, "ChangedByItems.Stats");
+}
+
+static void PrintStatsVector(MemoryReader reader, nint vectorAddress, string label)
+{
+    if (!reader.TryReadStruct<StdVector>(vectorAddress, out var vector) ||
+        !TryGetVectorCount(vector, Poe2.StatsComponent.StatArrayStride, 1, 1024, out var count))
+        return;
+
+    var sample = new List<string>();
+    for (var i = 0; i < Math.Min(count, 8); i++)
+    {
+        if (!reader.TryReadStruct<int>(vector.First + i * Poe2.StatsComponent.StatArrayStride, out var id) ||
+            !reader.TryReadStruct<int>(vector.First + i * Poe2.StatsComponent.StatArrayStride + 4, out var value))
+            break;
+        sample.Add($"{id}:{value}");
+    }
+    Console.WriteLine($"    STATS {label,-20} count={count} sample=[{string.Join(", ", sample)}]");
+}
+
+static void PrintInventoryRewardClues(MemoryReader reader, nint component, int componentWindow)
+{
+    var hits = new List<(int Offset, string Kind, string Text)>();
+    for (var offset = 0; offset <= componentWindow - 8; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, component, offset))
+        {
+            if (LooksLikeRuneforgeRewardText(clue.Text) || LooksLikeRuneforgeModText(clue.Text))
+                hits.Add((offset, clue.Kind, clue.Text));
+        }
+    }
+
+    if (hits.Count == 0) return;
+
+    Console.WriteLine("    INVENTORY reward/mod text clues:");
+    foreach (var hit in hits
+                 .GroupBy(h => h.Text, StringComparer.OrdinalIgnoreCase)
+                 .Select(g => g.OrderBy(h => h.Offset).First())
+                 .OrderBy(h => h.Offset)
+                 .Take(48))
+        Console.WriteLine($"      +0x{hit.Offset:X3} {hit.Kind,-12} {hit.Text}");
+}
+
+static bool LooksLikeRuneforgeModText(string text)
+{
+    if (text.Length is < 8 or > 220) return false;
+    return text.Contains("[", StringComparison.Ordinal) && text.Contains("]", StringComparison.Ordinal) ||
+           text.Contains("Damage", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Life", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Mana", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Resistance", StringComparison.OrdinalIgnoreCase) ||
+           text.Contains("Attributes", StringComparison.OrdinalIgnoreCase);
+}
+
+static int RunRuneforgeInventoryProbe(ProcessHandle process, MemoryReader reader, int componentWindow)
+{
+    componentWindow = Math.Clamp(componentWindow, 0x80, 0x4000);
+    var (_, _, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeforge inventory probe");
+    Console.WriteLine("-------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Component window: 0x{componentWindow:X}");
+    Console.WriteLine("Goal            : test RuneEncounterController Inventories vectors as inventory/item containers.");
+
+    var controllers = new List<(string Source, uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float? Dist)>();
+    foreach (var (source, mapOffset) in new[] { ("sleeping", Poe2.AreaInstance.SleepingEntities), ("awake", Poe2.AreaInstance.AwakeEntities) })
+    {
+        foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+        {
+            if (!metadata.Contains("RuneEncounterController", StringComparison.OrdinalIgnoreCase)) continue;
+            var grid = ReadEntityGrid(reader, entity);
+            var dist = playerGrid.HasValue && grid.HasValue
+                ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+                : (float?)null;
+            controllers.Add((source, id, entity, metadata, grid, dist));
+        }
+    }
+
+    if (controllers.Count == 0)
+    {
+        Console.WriteLine("No RuneEncounterController found. Open/approach the Runeshape panel and rerun.");
+        return 0;
+    }
+
+    foreach (var controller in controllers.OrderBy(c => c.Dist ?? float.MaxValue))
+    {
+        Console.WriteLine();
+        Console.WriteLine(
+            $"CONTROLLER {controller.Source,-8} id={controller.Id} addr=0x{controller.Entity:X16} " +
+            $"grid={FormatGrid(controller.Grid)} dist={FormatDistance(controller.Dist)} {controller.Metadata}");
+
+        var inventories = ResolveComponentAddr(reader, controller.Entity, "Inventories");
+        if (inventories == 0)
+        {
+            Console.WriteLine("  Inventories component not found.");
+            continue;
+        }
+
+        Console.WriteLine($"  Inventories @ 0x{inventories:X16}");
+        PrintInventoryComponentDecode(reader, inventories, componentWindow);
+    }
+
+    return 0;
+}
+
+static void PrintInventoryComponentDecode(MemoryReader reader, nint inventoriesComponent, int componentWindow)
+{
+    var tested = new HashSet<nint>();
+    var printed = 0;
+    for (var offset = 0; offset <= componentWindow - 0x18; offset += 8)
+    {
+        if (!reader.TryReadStruct<StdVector>(inventoriesComponent + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x4000, out var bytes))
+            continue;
+
+        var count8 = Math.Min(bytes / 8, 128);
+        var vectorPrinted = false;
+        for (var i = 0; i < count8; i++)
+        {
+            var ptr = SafePtr(reader, vector.First + i * 8);
+            if (ptr == 0 || !tested.Add(ptr)) continue;
+
+            var decodedInventory = TryPrintInventoryContainer(reader, ptr, $"    vector+0x{offset:X3}[{i}]");
+            var decodedItem = TryPrintItemEntity(reader, ptr, $"    vector+0x{offset:X3}[{i}] direct-item");
+            if (decodedInventory || decodedItem)
+            {
+                if (!vectorPrinted)
+                {
+                    Console.WriteLine($"  VECTOR +0x{offset:X3} bytes=0x{bytes:X} count8={bytes / 8}");
+                    vectorPrinted = true;
+                }
+                printed++;
+            }
+        }
+    }
+
+    if (printed == 0)
+        Console.WriteLine("  No inventory/item containers decoded from Inventories vectors.");
+}
+
+static int RunRuneforgeInventoryBlockProbe(ProcessHandle process, MemoryReader reader, int componentWindow, int entryLimit, int objectWindow)
+{
+    componentWindow = Math.Clamp(componentWindow, 0x150, 0x4000);
+    entryLimit = Math.Clamp(entryLimit, 1, 64);
+    objectWindow = Math.Clamp(objectWindow, 0x80, 0x2000);
+    var (_, _, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeforge inventory block probe");
+    Console.WriteLine("-------------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Component window: 0x{componentWindow:X}");
+    Console.WriteLine($"Entry limit     : {entryLimit}");
+    Console.WriteLine($"Object window   : 0x{objectWindow:X}");
+    Console.WriteLine("Goal            : inspect repeated Inventories blocks that appear on RuneEncounterController.");
+
+    var controllers = EnumerateRuneforgeSourceEntities(reader, areaInstance, playerGrid)
+        .Where(e => e.Metadata.Contains("RuneEncounterController", StringComparison.OrdinalIgnoreCase))
+        .OrderBy(e => e.Distance ?? float.MaxValue)
+        .ToArray();
+
+    if (controllers.Length == 0)
+    {
+        Console.WriteLine("No RuneEncounterController found.");
+        return 0;
+    }
+
+    foreach (var controller in controllers)
+    {
+        Console.WriteLine();
+        Console.WriteLine(
+            $"CONTROLLER {controller.Source,-8} id={controller.Id,-8} addr=0x{controller.Entity:X16} " +
+            $"dist={FormatDistance(controller.Distance)} grid={FormatGrid(controller.Grid)} {controller.Metadata}");
+        var inventories = ResolveComponentAddr(reader, controller.Entity, "Inventories");
+        if (inventories == 0)
+        {
+            Console.WriteLine("  Inventories component not found.");
+            continue;
+        }
+
+        Console.WriteLine($"  Inventories @ 0x{inventories:X16}");
+        PrintRuneforgeInventoryBlocks(reader, inventories, componentWindow, entryLimit, objectWindow);
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Compare before-open vs after-open:");
+    Console.WriteLine("  - A block/vector that changes only on the active nearby controller is likely the reward selection source.");
+    Console.WriteLine("  - Blocks that are identical on every sleeping controller are probably template inventory/layout data.");
+    return 0;
+}
+
+static int RunRuneforgeInventoryBlockWatch(ProcessHandle process, MemoryReader reader, int timeoutSeconds, int componentWindow, int entryLimit, int objectWindow)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 5, 600);
+    componentWindow = Math.Clamp(componentWindow, 0x150, 0x4000);
+    entryLimit = Math.Clamp(entryLimit, 1, 64);
+    objectWindow = Math.Clamp(objectWindow, 0x80, 0x2000);
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0 || inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge inventory block watch");
+    Console.WriteLine("-------------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Component window: 0x{componentWindow:X}");
+    Console.WriteLine($"Entry limit     : {entryLimit}");
+    Console.WriteLine($"Object window   : 0x{objectWindow:X}");
+    Console.WriteLine("Goal            : diff controller Inventories blocks before/after Runeshape opens.");
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    var before = CaptureRuneforgeInventoryBlockSnapshot(reader, areaInstance, playerGrid, componentWindow, entryLimit, objectWindow);
+    PrintInventoryBlockSnapshotSummary("before", before);
+    if (before.Count == 0)
+    {
+        Console.WriteLine("No RuneEncounterController inventory blocks found.");
+        return 0;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Open Runeshape now. Waiting until visible reward rows appear...");
+    var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+    while (DateTime.UtcNow < deadline)
+    {
+        Thread.Sleep(100);
+        var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+        if (uiRoot == 0) continue;
+        if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, 4000, 32, out _, out var catalog, out _, out _))
+            continue;
+        if (ReadRuneforgeCatalogRows(reader, catalog, 4000).Any(r => r.Visible))
+            break;
+    }
+
+    var after = CaptureRuneforgeInventoryBlockSnapshot(reader, areaInstance, playerGrid, componentWindow, entryLimit, objectWindow);
+    PrintInventoryBlockSnapshotSummary("after", after);
+    Console.WriteLine();
+    PrintInventoryBlockSnapshotDiff(reader, before, after, objectWindow);
+    return 0;
+}
+
+static IReadOnlyList<RuneforgeInventoryBlockSnapshot> CaptureRuneforgeInventoryBlockSnapshot(
+    MemoryReader reader,
+    nint areaInstance,
+    System.Numerics.Vector2? playerGrid,
+    int componentWindow,
+    int entryLimit,
+    int objectWindow)
+{
+    var result = new List<RuneforgeInventoryBlockSnapshot>();
+    foreach (var controller in EnumerateRuneforgeSourceEntities(reader, areaInstance, playerGrid)
+                 .Where(e => e.Metadata.Contains("RuneEncounterController", StringComparison.OrdinalIgnoreCase)))
+    {
+        var inventories = ResolveComponentAddr(reader, controller.Entity, "Inventories");
+        if (inventories == 0) continue;
+        const int BlockStride = 0x150;
+        var blockCount = Math.Min(componentWindow / BlockStride, 12);
+        for (var block = 0; block < blockCount; block++)
+        {
+            var blockBase = inventories + block * BlockStride;
+            if (!TryReadRuneforgeInventoryBlock(reader, blockBase, out var info)) continue;
+
+            var smallValues = ReadVectorQwords(reader, info.SmallFirst, info.SmallCount, entryLimit);
+            var largeValues = ReadVectorQwords(reader, info.LargeFirst, info.LargeCount, entryLimit);
+            result.Add(new RuneforgeInventoryBlockSnapshot(
+                controller.Source,
+                controller.Id,
+                controller.Entity,
+                controller.Distance,
+                block,
+                inventories,
+                info,
+                HashMemory(reader, blockBase, Math.Min(BlockStride, componentWindow - block * BlockStride)),
+                smallValues,
+                smallValues.Select(v => CaptureMemoryBytes(reader, v, objectWindow)).ToArray(),
+                largeValues,
+                largeValues.Select(v => CaptureMemoryBytes(reader, v, objectWindow)).ToArray()));
+        }
+    }
+
+    return result
+        .OrderBy(x => x.Distance ?? float.MaxValue)
+        .ThenBy(x => x.Source, StringComparer.Ordinal)
+        .ThenBy(x => x.ControllerId)
+        .ThenBy(x => x.Block)
+        .ToArray();
+}
+
+static void PrintInventoryBlockSnapshotSummary(string label, IReadOnlyList<RuneforgeInventoryBlockSnapshot> rows)
+{
+    Console.WriteLine($"{label} snapshot: {rows.Count} block(s)");
+    foreach (var row in rows.Take(20))
+        Console.WriteLine(
+            $"  {row.Source,-8} id={row.ControllerId,-8} dist={FormatDistance(row.Distance),6} block={row.Block} " +
+            $"countField={row.Info.CountField} small={row.Info.SmallCount}/{row.Info.SmallCapacity} large={row.Info.LargeCount}/{row.Info.LargeCapacity} " +
+            $"blockHash=0x{row.BlockHash:X8}");
+}
+
+static void PrintInventoryBlockSnapshotDiff(
+    MemoryReader reader,
+    IReadOnlyList<RuneforgeInventoryBlockSnapshot> before,
+    IReadOnlyList<RuneforgeInventoryBlockSnapshot> after,
+    int objectWindow)
+{
+    Console.WriteLine("Inventory block diff");
+    Console.WriteLine("--------------------");
+    var beforeMap = before.ToDictionary(x => (x.ControllerId, x.Block));
+    var afterMap = after.ToDictionary(x => (x.ControllerId, x.Block));
+    var keys = beforeMap.Keys.Union(afterMap.Keys).OrderBy(k => k.ControllerId).ThenBy(k => k.Block).ToArray();
+    var changed = 0;
+    foreach (var key in keys)
+    {
+        beforeMap.TryGetValue(key, out var b);
+        afterMap.TryGetValue(key, out var a);
+        if (b.ControllerId == 0)
+        {
+            Console.WriteLine($"  ADDED id={key.ControllerId} block={key.Block}");
+            changed++;
+            continue;
+        }
+        if (a.ControllerId == 0)
+        {
+            Console.WriteLine($"  REMOVED id={key.ControllerId} block={key.Block}");
+            changed++;
+            continue;
+        }
+
+        var diffs = new List<string>();
+        if (b.BlockHash != a.BlockHash) diffs.Add($"blockHash 0x{b.BlockHash:X8}->0x{a.BlockHash:X8}");
+        if (!b.Info.Equals(a.Info)) diffs.Add("blockInfo");
+        if (!b.SmallValues.SequenceEqual(a.SmallValues)) diffs.Add("smallQwords");
+        if (!MemorySamplesEqual(b.SmallTargetSamples, a.SmallTargetSamples)) diffs.Add("smallTarget");
+        if (!b.LargeValues.SequenceEqual(a.LargeValues)) diffs.Add("largeQwords");
+        if (!MemorySamplesEqual(b.LargeTargetSamples, a.LargeTargetSamples)) diffs.Add("largeTarget");
+        if (diffs.Count == 0) continue;
+
+        Console.WriteLine(
+            $"  CHANGED {a.Source,-8} id={key.ControllerId,-8} dist={FormatDistance(a.Distance),6} block={key.Block}: {string.Join(", ", diffs)}");
+        PrintQwordTargetDiff("small", b.SmallValues, b.SmallTargetSamples, a.SmallValues, a.SmallTargetSamples);
+        PrintQwordTargetDiff("large", b.LargeValues, b.LargeTargetSamples, a.LargeValues, a.LargeTargetSamples);
+        PrintChangedTargetDetails(reader, "small", b.SmallValues, b.SmallTargetSamples, a.SmallValues, a.SmallTargetSamples, objectWindow);
+        PrintChangedTargetDetails(reader, "large", b.LargeValues, b.LargeTargetSamples, a.LargeValues, a.LargeTargetSamples, objectWindow);
+        changed++;
+    }
+
+    if (changed == 0)
+        Console.WriteLine("  no block/vector/target hash changes detected");
+}
+
+static void PrintQwordTargetDiff(string label, IReadOnlyList<nint> beforeValues, IReadOnlyList<byte[]> beforeSamples, IReadOnlyList<nint> afterValues, IReadOnlyList<byte[]> afterSamples)
+{
+    var max = Math.Max(beforeValues.Count, afterValues.Count);
+    var printedGroups = new HashSet<(nint Before, nint After, uint BeforeHash, uint AfterHash)>();
+    for (var i = 0; i < max; i++)
+    {
+        var bv = i < beforeValues.Count ? beforeValues[i] : 0;
+        var av = i < afterValues.Count ? afterValues[i] : 0;
+        var bb = i < beforeSamples.Count ? beforeSamples[i] : [];
+        var ab = i < afterSamples.Count ? afterSamples[i] : [];
+        var bh = HashBytes(bb);
+        var ah = HashBytes(ab);
+        if (bv == av && bh == ah) continue;
+        if (!printedGroups.Add((bv, av, bh, ah)))
+            continue;
+
+        var sameChanges = new List<int>();
+        for (var j = i; j < max; j++)
+        {
+            var gbv = j < beforeValues.Count ? beforeValues[j] : 0;
+            var gav = j < afterValues.Count ? afterValues[j] : 0;
+            var gbb = j < beforeSamples.Count ? beforeSamples[j] : [];
+            var gab = j < afterSamples.Count ? afterSamples[j] : [];
+            if (gbv == bv && gav == av && HashBytes(gbb) == bh && HashBytes(gab) == ah)
+                sameChanges.Add(j);
+        }
+
+        Console.WriteLine($"    {label}[{FormatIndexList(sameChanges)}] 0x{bv:X16}/0x{bh:X8} -> 0x{av:X16}/0x{ah:X8}");
+        if (bv == av && bv != 0)
+            PrintMemorySampleDiff(bb, ab, "      ");
+    }
+}
+
+static void PrintChangedTargetDetails(
+    MemoryReader reader,
+    string label,
+    IReadOnlyList<nint> beforeValues,
+    IReadOnlyList<byte[]> beforeSamples,
+    IReadOnlyList<nint> afterValues,
+    IReadOnlyList<byte[]> afterSamples,
+    int objectWindow)
+{
+    var max = Math.Max(beforeValues.Count, afterValues.Count);
+    var printedTargets = new HashSet<nint>();
+    for (var i = 0; i < max; i++)
+    {
+        var bv = i < beforeValues.Count ? beforeValues[i] : 0;
+        var av = i < afterValues.Count ? afterValues[i] : 0;
+        var bb = i < beforeSamples.Count ? beforeSamples[i] : [];
+        var ab = i < afterSamples.Count ? afterSamples[i] : [];
+        if (bv == av && HashBytes(bb) == HashBytes(ab)) continue;
+
+        var target = av != 0 ? av : bv;
+        if (!IsPlausiblePointer(target) || !printedTargets.Add(target)) continue;
+        Console.WriteLine($"    {label} target 0x{target:X16} after-open summary:");
+        PrintPointedObjectSummary(reader, target, "      ", Math.Min(objectWindow, 0x800));
+        PrintChangedPointerFieldDetails(reader, bb, ab, "      ");
+        if (printedTargets.Count >= 8)
+        {
+            Console.WriteLine($"      ...additional changed {label} targets omitted");
+            break;
+        }
+    }
+}
+
+static string FormatIndexList(IReadOnlyList<int> indexes)
+{
+    if (indexes.Count == 0) return "";
+    if (indexes.Count == 1) return indexes[0].ToString();
+    if (indexes.Count <= 8) return string.Join(",", indexes);
+    return $"{indexes[0]}..{indexes[^1]} ({indexes.Count})";
+}
+
+static void PrintChangedPointerFieldDetails(MemoryReader reader, byte[] before, byte[] after, string indent)
+{
+    var min = Math.Min(before.Length, after.Length);
+    var printed = 0;
+    var seen = new HashSet<nint>();
+    for (var offset = 0; offset + IntPtr.Size <= min && printed < 8; offset += 8)
+    {
+        var b = ReadPointerFromBytes(before, offset);
+        var a = ReadPointerFromBytes(after, offset);
+        if (b == a || !IsPlausiblePointer(a) || !seen.Add(a)) continue;
+        Console.WriteLine($"{indent}changed ptr +0x{offset:X3}: 0x{b:X16} -> 0x{a:X16}");
+        PrintPointedObjectSummary(reader, a, indent + "  ", 0x300);
+        printed++;
+    }
+}
+
+static nint ReadPointerFromBytes(byte[] bytes, int offset)
+{
+    if (offset < 0 || offset + IntPtr.Size > bytes.Length) return 0;
+    return IntPtr.Size == 8
+        ? (nint)BitConverter.ToInt64(bytes, offset)
+        : (nint)BitConverter.ToInt32(bytes, offset);
+}
+
+static bool MemorySamplesEqual(IReadOnlyList<byte[]> left, IReadOnlyList<byte[]> right)
+{
+    if (left.Count != right.Count) return false;
+    for (var i = 0; i < left.Count; i++)
+        if (HashBytes(left[i]) != HashBytes(right[i])) return false;
+    return true;
+}
+
+static void PrintMemorySampleDiff(byte[] before, byte[] after, string indent)
+{
+    var min = Math.Min(before.Length, after.Length);
+    var printed = 0;
+    for (var offset = 0; offset + 4 <= min && printed < 24; offset += 4)
+    {
+        var b = BitConverter.ToUInt32(before, offset);
+        var a = BitConverter.ToUInt32(after, offset);
+        if (b == a) continue;
+        Console.WriteLine($"{indent}+0x{offset:X3}: u32 0x{b:X8} ({b}) -> 0x{a:X8} ({a})");
+        printed++;
+    }
+    if (printed == 0)
+    {
+        for (var offset = 0; offset < min && printed < 24; offset++)
+        {
+            if (before[offset] == after[offset]) continue;
+            Console.WriteLine($"{indent}+0x{offset:X3}: byte 0x{before[offset]:X2} -> 0x{after[offset]:X2}");
+            printed++;
+        }
+    }
+}
+
+static IReadOnlyList<nint> ReadVectorQwords(MemoryReader reader, nint first, int count, int entryLimit)
+{
+    var result = new List<nint>();
+    for (var i = 0; i < Math.Min(count, entryLimit); i++)
+    {
+        if (!reader.TryReadStruct<nint>(first + i * 8, out var value))
+            break;
+        result.Add(value);
+    }
+    return result;
+}
+
+static uint HashMemory(MemoryReader reader, nint address, int length)
+{
+    return HashBytes(CaptureMemoryBytes(reader, address, length));
+}
+
+static byte[] CaptureMemoryBytes(MemoryReader reader, nint address, int length)
+{
+    if (address == 0 || length <= 0) return [];
+    var bytes = new byte[length];
+    var read = reader.TryReadBytes(address, bytes);
+    if (read <= 0) return [];
+    if (read < bytes.Length) Array.Resize(ref bytes, read);
+    return bytes;
+}
+
+static uint HashBytes(IReadOnlyList<byte> bytes)
+{
+    if (bytes.Count == 0) return 0;
+    const uint offset = 2166136261;
+    const uint prime = 16777619;
+    var hash = offset;
+    for (var i = 0; i < bytes.Count; i++)
+    {
+        hash ^= bytes[i];
+        hash *= prime;
+    }
+    return hash;
+}
+
+static void PrintRuneforgeInventoryBlocks(MemoryReader reader, nint inventories, int componentWindow, int entryLimit, int objectWindow)
+{
+    const int BlockStride = 0x150;
+    var blockCount = Math.Min(componentWindow / BlockStride, 12);
+    for (var block = 0; block < blockCount; block++)
+    {
+        var blockBase = inventories + block * BlockStride;
+        if (!TryReadRuneforgeInventoryBlock(reader, blockBase, out var info))
+            continue;
+
+        Console.WriteLine(
+            $"  BLOCK[{block}] +0x{block * BlockStride:X3} " +
+            $"smallVec={info.SmallCount}/{info.SmallCapacity} largeVec={info.LargeCount}/{info.LargeCapacity} " +
+            $"countField@+0xF8={info.CountField} flags?=0x{info.Flags:X8}");
+        Console.WriteLine(
+            $"    small +0x20 0x{info.SmallFirst:X16}..0x{info.SmallLast:X16}..0x{info.SmallEnd:X16}");
+        DumpQwordVectorSamples(reader, info.SmallFirst, info.SmallCount, entryLimit, objectWindow, "      small");
+        Console.WriteLine(
+            $"    large +0xE0 0x{info.LargeFirst:X16}..0x{info.LargeLast:X16}..0x{info.LargeEnd:X16}");
+        DumpQwordVectorSamples(reader, info.LargeFirst, info.LargeCount, entryLimit, objectWindow, "      large");
+    }
+}
+
+static bool TryReadRuneforgeInventoryBlock(MemoryReader reader, nint blockBase, out RuneforgeInventoryBlockInfo info)
+{
+    info = default;
+    reader.TryReadStruct<uint>(blockBase, out var flags);
+    reader.TryReadStruct<int>(blockBase + 0xF8, out var countField);
+
+    if (!reader.TryReadStruct<StdVector>(blockBase + 0x20, out var small) ||
+        !TryGetVectorByteSize(small, 8, 0x10000, out var smallBytes) ||
+        !reader.TryReadStruct<StdVector>(blockBase + 0xE0, out var large) ||
+        !TryGetVectorByteSize(large, 8, 0x20000, out var largeBytes))
+        return false;
+
+    var smallCapacity = ((long)small.End - (long)small.First) / 8;
+    var largeCapacity = ((long)large.End - (long)large.First) / 8;
+    if (smallCapacity is < 0 or > 8192 || largeCapacity is < 0 or > 8192)
+        return false;
+
+    info = new RuneforgeInventoryBlockInfo(
+        flags,
+        countField,
+        small.First,
+        small.Last,
+        small.End,
+        smallBytes / 8,
+        (int)smallCapacity,
+        large.First,
+        large.Last,
+        large.End,
+        largeBytes / 8,
+        (int)largeCapacity);
+    return true;
+}
+
+static void DumpQwordVectorSamples(MemoryReader reader, nint first, int count, int entryLimit, int objectWindow, string label)
+{
+    for (var i = 0; i < Math.Min(count, entryLimit); i++)
+    {
+        if (!reader.TryReadStruct<nint>(first + i * 8, out var value))
+            break;
+        Console.WriteLine($"{label}[{i,2}] qword=0x{value:X16}");
+        if (IsPlausiblePointer(value))
+            PrintPointedObjectSummary(reader, value, $"{label}     ", objectWindow);
+    }
+}
+
+static bool TryPrintInventoryContainer(MemoryReader reader, nint inventory, string label)
+{
+    if (!reader.TryReadStruct<int>(inventory + Poe2.Inventory.TotalBoxesX, out var boxesX) ||
+        !reader.TryReadStruct<int>(inventory + Poe2.Inventory.TotalBoxesY, out var boxesY) ||
+        boxesX is < 0 or > 80 ||
+        boxesY is < 0 or > 80 ||
+        !reader.TryReadStruct<StdVector>(inventory + Poe2.Inventory.ItemListVec, out var items) ||
+        !TryGetVectorByteSize(items, Poe2.ServerData.InvArrayStride, Poe2.ServerData.InvArrayStride * 512, out var itemBytes))
+        return false;
+
+    var itemCount = itemBytes / Poe2.ServerData.InvArrayStride;
+    if (itemCount == 0 && boxesX == 0 && boxesY == 0) return false;
+
+    Console.WriteLine($"{label} inventory=0x{inventory:X16} size={boxesX}x{boxesY} items={itemCount}");
+    for (var i = 0; i < Math.Min(itemCount, 32); i++)
+    {
+        var record = items.First + i * Poe2.ServerData.InvArrayStride;
+        var item = SafePtr(reader, record + Poe2.InventoryItem.Item);
+        if (item == 0) continue;
+        reader.TryReadStruct<int>(record + Poe2.InventoryItem.SlotStartX, out var x0);
+        reader.TryReadStruct<int>(record + Poe2.InventoryItem.SlotStartY, out var y0);
+        reader.TryReadStruct<int>(record + Poe2.InventoryItem.SlotEndX, out var x1);
+        reader.TryReadStruct<int>(record + Poe2.InventoryItem.SlotEndY, out var y1);
+        TryPrintItemEntity(reader, item, $"      item[{i}] slot=({x0},{y0})-({x1},{y1})");
+    }
+
+    return true;
+}
+
+static bool TryPrintItemEntity(MemoryReader reader, nint item, string label)
+{
+    var metadata = ReadEntityMetadata(reader, item);
+    var components = ReadComponentMap(reader, item);
+    if (components.Count == 0 && string.IsNullOrWhiteSpace(metadata))
+        return false;
+
+    var name = ItemNameFromMetadata(metadata);
+    var stack = ReadItemStackCountProbe(reader, item);
+    var renderItem = components.FirstOrDefault(c => c.Name == "RenderItem").Address;
+    var art = "";
+    if (renderItem != 0)
+    {
+        var path = SafePtr(reader, renderItem + Poe2.RenderItemComponent.ResourcePath);
+        if (path != 0) art = reader.ReadStringUtf16(path, 128);
+    }
+
+    Console.WriteLine($"{label} item=0x{item:X16} stack={stack} name='{name}' meta='{metadata}' art='{art}' comps=[{string.Join(",", components.Select(c => c.Name))}]");
+
+    var mods = components.FirstOrDefault(c => c.Name == "Mods").Address;
+    if (mods != 0)
+        PrintItemModsProbe(reader, mods);
+    return true;
+}
+
+static int ReadItemStackCountProbe(MemoryReader reader, nint item)
+{
+    var stack = ResolveComponentAddr(reader, item, "Stack");
+    return stack != 0 &&
+           reader.TryReadStruct<int>(stack + Poe2.StackComponent.Count, out var count) &&
+           count is > 0 and < 100000
+        ? count
+        : 1;
+}
+
+static void PrintItemModsProbe(MemoryReader reader, nint mods)
+{
+    if (reader.TryReadStruct<int>(mods + Poe2.ModsComponent.Rarity, out var rarity))
+        Console.WriteLine($"        rarity={rarity}");
+    PrintItemModVectorProbe(reader, mods + Poe2.ModsComponent.ImplicitMods, "implicit");
+    PrintItemModVectorProbe(reader, mods + Poe2.ModsComponent.ExplicitMods, "explicit");
+    PrintItemModVectorProbe(reader, mods + Poe2.ModsComponent.EnchantMods, "enchant");
+}
+
+static void PrintItemModVectorProbe(MemoryReader reader, nint vectorAddress, string kind)
+{
+    if (!reader.TryReadStruct<StdVector>(vectorAddress, out var vector) ||
+        !TryGetVectorByteSize(vector, Poe2.ModsComponent.ModArrayStride, Poe2.ModsComponent.ModArrayStride * 64, out var bytes))
+        return;
+
+    var count = bytes / Poe2.ModsComponent.ModArrayStride;
+    for (var i = 0; i < Math.Min(count, 16); i++)
+    {
+        var modArray = vector.First + i * Poe2.ModsComponent.ModArrayStride;
+        var row = SafePtr(reader, modArray + Poe2.ModsComponent.ModRecordPtr);
+        var idPtr = row == 0 ? 0 : SafePtr(reader, row + Poe2.ModsComponent.ModRecordIdPtr);
+        var id = idPtr == 0 ? "" : reader.ReadStringUtf16(idPtr, 96);
+        if (string.IsNullOrWhiteSpace(id)) continue;
+
+        var values = new List<int>();
+        if (reader.TryReadStruct<StdVector>(modArray, out var valuesVec) &&
+            TryGetVectorByteSize(valuesVec, sizeof(int), sizeof(int) * 16, out var valueBytes))
+        {
+            for (var v = 0; v < Math.Min(valueBytes / sizeof(int), 8); v++)
+                if (reader.TryReadStruct<int>(valuesVec.First + v * sizeof(int), out var value))
+                    values.Add(value);
+        }
+        if (values.Count == 0 && reader.TryReadStruct<int>(modArray + 0x18, out var fallback))
+            values.Add(fallback);
+
+        var rendered = string.Join("; ", ItemModTranslator.Shared.RenderMod(id, values));
+        Console.WriteLine($"        {kind}[{i}] id='{id}' values=[{string.Join(",", values)}] text='{rendered}'");
+    }
+}
+
+static int RunRuneforgeVectorProbe(ProcessHandle process, MemoryReader reader, int objectWindow, int entryLimit)
+{
+    objectWindow = Math.Clamp(objectWindow, 0x80, 0x2000);
+    entryLimit = Math.Clamp(entryLimit, 1, 64);
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeforge vector probe");
+    Console.WriteLine("----------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Object window : 0x{objectWindow:X}");
+    Console.WriteLine($"Entry limit   : {entryLimit}");
+    Console.WriteLine("Goal          : walk Expedition2Encounter vector suspects that populate after opening Runeshape.");
+    if (inGameState != 0)
+    {
+        var runeforge = new Poe2Runeforge(reader);
+        var rewards = runeforge.ReadRewards(inGameState, 1920, 1080);
+        var hiddenRewards = runeforge.ReadRewardsIncludingHidden(inGameState, 1920, 1080, out var hiddenResolved);
+        Console.WriteLine($"Runeshape UI  : panelOpen={runeforge.PanelOpen} rewards={rewards.Count}");
+        Console.WriteLine($"Hidden UI     : resolved={hiddenResolved} rewards={hiddenRewards.Count}");
+        foreach (var reward in rewards.Take(16))
+            Console.WriteLine($"  UI reward   : {reward.Count}x {reward.Name}");
+        if (rewards.Count == 0)
+            foreach (var reward in hiddenRewards.Take(16))
+                Console.WriteLine($"  hidden row  : {reward.Count}x {reward.Name}");
+    }
+
+    var scanned = 0;
+    var seen = new HashSet<uint>();
+    foreach (var (source, mapOffset) in new[] { ("sleeping", Poe2.AreaInstance.SleepingEntities), ("awake", Poe2.AreaInstance.AwakeEntities) })
+    {
+        foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+        {
+            if (!seen.Add(id) ||
+                !metadata.Contains("Expedition2Encounter", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            scanned++;
+            var grid = ReadEntityGrid(reader, entity);
+            var dist = playerGrid.HasValue && grid.HasValue
+                ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+                : (float?)null;
+
+            Console.WriteLine();
+            Console.WriteLine(
+                $"ENCOUNTER {source,-8} id={id} addr=0x{entity:X16} " +
+                $"grid={FormatGrid(grid)} dist={FormatDistance(dist)} {metadata}");
+
+            var stateMachine = ResolveComponentAddr(reader, entity, "StateMachine");
+            if (stateMachine != 0)
+            {
+                Console.WriteLine($"  StateMachine @ 0x{stateMachine:X16}");
+                PrintStateMachineCandidates(reader, stateMachine);
+            }
+
+            var stats = ResolveComponentAddr(reader, entity, "Stats");
+            if (stats != 0)
+            {
+                Console.WriteLine($"  Stats @ 0x{stats:X16}");
+                PrintStatsComponentClues(reader, stats);
+                PrintSuspectObjectVectors(reader, stats, "Stats", [0x650, 0x860, 0xA70, 0xC80, 0xE90], entryLimit, objectWindow);
+                PrintAllObjectVectors(reader, stats, "Stats", 0x1000, entryLimit, objectWindow);
+            }
+            else
+            {
+                Console.WriteLine("  Stats component not found.");
+            }
+
+            var preload = ResolveComponentAddr(reader, entity, "Preload");
+            if (preload != 0)
+            {
+                Console.WriteLine($"  Preload @ 0x{preload:X16}");
+                PrintPreloadRuneforgeWindow(reader, preload, 0x280, 0x420, entryLimit, objectWindow);
+                PrintAllObjectVectors(reader, preload, "Preload", 0x800, entryLimit, objectWindow);
+            }
+            else
+            {
+                Console.WriteLine("  Preload component not found.");
+            }
+        }
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Scanned {scanned} Expedition2Encounter entity/entities.");
+    Console.WriteLine("Run this before opening Runeshape and again after opening it; compare which vectors/text appear.");
+    return 0;
+}
+
+static int RunRuneforgeVectorWatch(ProcessHandle process, MemoryReader reader, int timeoutSeconds, int objectWindow)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 5, 600);
+    objectWindow = Math.Clamp(objectWindow, 0x80, 0x2000);
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (inGameState == 0 || areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var encounter = FindNearestRuneforgeEncounter(reader, areaInstance, localPlayer);
+    if (encounter.Entity == 0)
+    {
+        Console.Error.WriteLine("No Expedition2Encounter found in awake/sleeping maps.");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge vector watch");
+    Console.WriteLine("----------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Encounter     : {encounter.Source} id={encounter.Id} addr=0x{encounter.Entity:X16} grid={FormatGrid(encounter.Grid)} dist={FormatDistance(encounter.Distance)}");
+    Console.WriteLine($"Object window : 0x{objectWindow:X}");
+    Console.WriteLine($"Timeout       : {timeoutSeconds}s");
+    Console.WriteLine("Step          : leave Runeshape closed until the baseline prints, then open the Runeshape panel.");
+
+    var runeforge = new Poe2Runeforge(reader);
+    var baselineRewards = runeforge.ReadRewards(inGameState, 1920, 1080);
+    var baselineHiddenRewards = runeforge.ReadRewardsIncludingHidden(inGameState, 1920, 1080, out var baselineHiddenResolved);
+    Console.WriteLine($"Baseline UI   : panelOpen={runeforge.PanelOpen} rewards={baselineRewards.Count}");
+    Console.WriteLine($"Baseline hid  : resolved={baselineHiddenResolved} rewards={baselineHiddenRewards.Count}");
+    foreach (var reward in baselineHiddenRewards.Take(16))
+        Console.WriteLine($"  hidden row  : {reward.Count}x {reward.Name}");
+    var before = CaptureRuneforgeEncounterSnapshot(reader, encounter.Entity);
+    PrintRuneforgeSnapshotSummary("Baseline", before);
+
+    if (runeforge.PanelOpen)
+        Console.WriteLine("Panel is already open; close/reopen or run this on a fresh closed baseline for a cleaner delta.");
+
+    var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+    List<Poe2Runeforge.RuneReward> rewards = baselineRewards;
+    while (DateTime.UtcNow < deadline)
+    {
+        Thread.Sleep(250);
+        rewards = runeforge.ReadRewards(inGameState, 1920, 1080);
+        if (runeforge.PanelOpen && rewards.Count > 0)
+            break;
+    }
+
+    if (!runeforge.PanelOpen || rewards.Count == 0)
+    {
+        Console.WriteLine("Timed out waiting for visible Runeshape rewards.");
+        return 0;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Opened UI     : rewards={rewards.Count}");
+    foreach (var reward in rewards.Take(24))
+        Console.WriteLine($"  UI reward   : {reward.Count}x {reward.Name}");
+    var openedHiddenRewards = runeforge.ReadRewardsIncludingHidden(inGameState, 1920, 1080, out var openedHiddenResolved);
+    Console.WriteLine($"Opened hidden : resolved={openedHiddenResolved} rewards={openedHiddenRewards.Count}");
+
+    var after = CaptureRuneforgeEncounterSnapshot(reader, encounter.Entity);
+    PrintRuneforgeSnapshotSummary("After open", after);
+    PrintRuneforgeSnapshotDelta(reader, before, after, objectWindow);
+    return 0;
+}
+
+static int RunRuneforgeUiGateProbe(ProcessHandle process, MemoryReader reader, int maxChildren, int maxBranches)
+{
+    maxChildren = Math.Clamp(maxChildren, 16, 20000);
+    maxBranches = Math.Clamp(maxBranches, 1, 256);
+    var (_, inGameState, areaInstance, _) = ResolveChain(process, reader);
+    if (inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve InGameState (in game?).");
+        return 1;
+    }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.Error.WriteLine("UiRoot is null.");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge UI gate probe");
+    Console.WriteLine("-----------------------");
+    if (areaInstance != 0) PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"UiRoot       : 0x{uiRoot:X16}");
+    Console.WriteLine($"Flags field  : UiElement+0x{Poe2.UiElement.Flags:X}, visible bit {Poe2.UiElement.FlagVisibleBit} mask=0x{1u << Poe2.UiElement.FlagVisibleBit:X}");
+    Console.WriteLine($"Fingerprints : {string.Join(" -> ", Poe2.Runeforge.PanelFlagFingerprints.Select(x => $"0x{x:X8}"))}");
+    Console.WriteLine($"Gate step    : {Poe2.Runeforge.GateStep}");
+    Console.WriteLine($"Viewport step: {Poe2.Runeforge.ViewportStep}");
+
+    var runeforge = new Poe2Runeforge(reader);
+    var visibleRewards = runeforge.ReadRewards(inGameState, 1920, 1080);
+    var hiddenRewards = runeforge.ReadRewardsIncludingHidden(inGameState, 1920, 1080, out var hiddenResolved);
+    Console.WriteLine();
+    Console.WriteLine($"Reader visible: panelOpen={runeforge.PanelOpen} rewards={visibleRewards.Count}");
+    Console.WriteLine($"Reader hidden : resolved={hiddenResolved} rewards={hiddenRewards.Count}");
+    foreach (var reward in (visibleRewards.Count > 0 ? visibleRewards : hiddenRewards).Take(16))
+        Console.WriteLine($"  row         : {reward.Count}x {reward.Name}");
+
+    Console.WriteLine();
+    Console.WriteLine("Visible-gated fingerprint trace");
+    Console.WriteLine("-------------------------------");
+    var visiblePath = TraceRuneforgeUiPath(reader, uiRoot, requireVisibleGate: true, maxChildren, maxBranches);
+    PrintRuneforgeUiTrace(reader, visiblePath);
+
+    Console.WriteLine();
+    Console.WriteLine("Hidden-gate fingerprint trace");
+    Console.WriteLine("-----------------------------");
+    var hiddenPath = TraceRuneforgeUiPath(reader, uiRoot, requireVisibleGate: false, maxChildren, maxBranches);
+    PrintRuneforgeUiTrace(reader, hiddenPath);
+
+    Console.WriteLine();
+    Console.WriteLine("Visible-gated matching containers");
+    Console.WriteLine("---------------------------------");
+    var visiblePaths = EnumerateRuneforgeUiPaths(reader, uiRoot, requireVisibleGate: true, maxChildren, maxBranches);
+    PrintRuneforgeUiPathSet(
+        reader,
+        visiblePaths,
+        maxChildren);
+
+    Console.WriteLine();
+    Console.WriteLine("Hidden-gate matching containers");
+    Console.WriteLine("-------------------------------");
+    var hiddenPaths = EnumerateRuneforgeUiPaths(reader, uiRoot, requireVisibleGate: false, maxChildren, maxBranches);
+    PrintRuneforgeUiPathSet(
+        reader,
+        hiddenPaths,
+        maxChildren);
+
+    Console.WriteLine();
+    Console.WriteLine("Final-parent child dump");
+    Console.WriteLine("-----------------------");
+    PrintRuneforgeFinalParentChildren(reader, hiddenPaths.Count > 0 ? hiddenPaths : visiblePaths, maxChildren);
+
+    Console.WriteLine();
+    Console.WriteLine("Write-research notes:");
+    Console.WriteLine("  - This probe is read-only; it does not modify client memory.");
+    Console.WriteLine("  - A plausible write target requires a stable gate/path while closed plus a recipes container.");
+    Console.WriteLine("  - If hidden trace fails before final recipes, flipping only the visible bit is unlikely to reveal rewards.");
+    return 0;
+}
+
+static int RunRuneforgeUiChildWatch(ProcessHandle process, MemoryReader reader, int timeoutSeconds, int maxChildren, int maxBranches, int fieldWindow)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 5, 600);
+    maxChildren = Math.Clamp(maxChildren, 16, 20000);
+    maxBranches = Math.Clamp(maxBranches, 1, 256);
+    fieldWindow = Math.Clamp(fieldWindow, 0x200, 0x4000);
+
+    var (_, inGameState, areaInstance, _) = ResolveChain(process, reader);
+    if (inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve InGameState (in game?).");
+        return 1;
+    }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.Error.WriteLine("UiRoot is null.");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge UI child watch");
+    Console.WriteLine("------------------------");
+    if (areaInstance != 0) PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"UiRoot       : 0x{uiRoot:X16}");
+    Console.WriteLine($"Timeout      : {timeoutSeconds}s");
+    Console.WriteLine($"Field window : 0x{fieldWindow:X}");
+    Console.WriteLine("Goal         : compare final-parent child[0] before/after Runeshape populates it.");
+
+    if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out var beforeParent, out var beforeCatalog, out var beforeBonus, out var beforePath))
+    {
+        Console.Error.WriteLine("Could not resolve the Runeshape final parent path. Open/close the panel once, then retry.");
+        return 1;
+    }
+
+    var before = CaptureRuneforgeUiChildSnapshot(reader, "before", beforeCatalog, maxChildren, fieldWindow);
+    Console.WriteLine();
+    Console.WriteLine($"Resolved final parent: 0x{beforeParent:X16}, path=[{string.Join("/", beforePath.Select(p => p.ChildIndex))}]");
+    Console.WriteLine($"Catalog child[0]    : 0x{beforeCatalog:X16}");
+    Console.WriteLine($"Bonus child[1]      : 0x{beforeBonus:X16}");
+    PrintRuneforgeUiChildSnapshot(before);
+
+    if (before.ChildCount <= 0)
+        Console.WriteLine();
+    if (before.ChildCount <= 0)
+        Console.WriteLine("Open the Runeshape panel now. Watching for catalog child[0] to populate...");
+    else
+        Console.WriteLine("Catalog child[0] is already populated; capturing comparison snapshot immediately.");
+
+    RuneforgeUiChildSnapshot after = default;
+    var gotAfter = before.ChildCount > 0;
+    if (gotAfter)
+    {
+        after = CaptureRuneforgeUiChildSnapshot(reader, "after", beforeCatalog, maxChildren, fieldWindow);
+    }
+    else
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(250);
+            if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out _, out var catalog, out _, out _))
+                continue;
+
+            var snap = CaptureRuneforgeUiChildSnapshot(reader, "after", catalog, maxChildren, fieldWindow);
+            if (snap.ChildCount <= 0 && snap.VisibleRows.Count == 0) continue;
+
+            after = snap;
+            gotAfter = true;
+            break;
+        }
+    }
+
+    if (!gotAfter)
+    {
+        Console.WriteLine("Timed out before catalog child[0] populated. Keep the game in map and run this again just before opening Runeshape.");
+        return 2;
+    }
+
+    Console.WriteLine();
+    PrintRuneforgeUiChildSnapshot(after);
+    Console.WriteLine();
+    PrintRuneforgeUiChildSnapshotDiff(before, after);
+    Console.WriteLine();
+    Console.WriteLine("Read-only conclusion aid:");
+    Console.WriteLine("  - If only child vector pointers/count changed, the panel open action is materializing rows elsewhere.");
+    Console.WriteLine("  - If stable scalar fields flip before child count changes, those fields are better write-research candidates than visibility flags.");
+    return 0;
+}
+
+static int RunRuneforgeUiPopulateTimeline(ProcessHandle process, MemoryReader reader, int timeoutSeconds, int pollMs, int maxChildren, int maxBranches)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 5, 600);
+    pollMs = Math.Clamp(pollMs, 5, 1000);
+    maxChildren = Math.Clamp(maxChildren, 16, 20000);
+    maxBranches = Math.Clamp(maxBranches, 1, 256);
+
+    var (_, inGameState, areaInstance, _) = ResolveChain(process, reader);
+    if (inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve InGameState (in game?).");
+        return 1;
+    }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.Error.WriteLine("UiRoot is null.");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge UI populate timeline");
+    Console.WriteLine("------------------------------");
+    if (areaInstance != 0) PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"UiRoot       : 0x{uiRoot:X16}");
+    Console.WriteLine($"Timeout      : {timeoutSeconds}s");
+    Console.WriteLine($"Poll         : {pollMs}ms");
+    Console.WriteLine("Goal         : determine whether +0x2E8/+0x2F0 lead or follow catalog row population.");
+
+    if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out var parent, out var catalog, out var bonus, out var path))
+    {
+        Console.Error.WriteLine("Could not resolve the Runeshape final parent path. Open/close the panel once, then retry.");
+        return 1;
+    }
+
+    Console.WriteLine($"Resolved final parent: 0x{parent:X16}, path=[{string.Join("/", path.Select(p => p.ChildIndex))}]");
+    Console.WriteLine($"Catalog child[0]    : 0x{catalog:X16}");
+    Console.WriteLine($"Bonus child[1]      : 0x{bonus:X16}");
+    Console.WriteLine();
+    Console.WriteLine("Open the Runeshape panel now. Logging only when watched fields change...");
+    Console.WriteLine("  ms       rows  cap   visibleRows  vecLast              mirrorRows  mirrorLast           tabs +2E8 +2F0 flags");
+
+    var start = System.Diagnostics.Stopwatch.StartNew();
+    var last = CaptureRuneforgePopulateState(reader, catalog, maxChildren);
+    PrintRuneforgePopulateState(0, last);
+    if (last.ChildCount > 0)
+        Console.WriteLine("  note: catalog was already populated at start; use a fresh map/area or reopen the client for a clean pre-open run.");
+
+    var sawRows = last.ChildCount > 0;
+    var populatedAtStart = sawRows;
+    var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+    while (DateTime.UtcNow < deadline)
+    {
+        Thread.Sleep(pollMs);
+        if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out _, out var currentCatalog, out _, out _))
+            continue;
+
+        var state = CaptureRuneforgePopulateState(reader, currentCatalog, maxChildren);
+        if (!state.Equals(last))
+        {
+            PrintRuneforgePopulateState(start.ElapsedMilliseconds, state);
+            last = state;
+        }
+
+        if (!populatedAtStart && state.ChildCount > 0)
+        {
+            sawRows = true;
+            if (state.VisibleRows > 0)
+                break;
+        }
+    }
+
+    if (!sawRows)
+    {
+        Console.WriteLine("Timed out before catalog rows appeared.");
+        return 2;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Interpretation:");
+    Console.WriteLine("  - +2E8/+2F0 changing before rows suggests a possible population gate.");
+    Console.WriteLine("  - rows changing first means those fields are likely bookkeeping after row creation.");
+    Console.WriteLine("  - rows already present at t=0 means this was not a clean map-entry/pre-open sample.");
+    Console.WriteLine("  - all changes in one poll means rerun with --poll-ms 5 for tighter ordering.");
+    return 0;
+}
+
+static int RunRuneforgeUiLatchWriteTest(
+    ProcessHandle process,
+    MemoryReader reader,
+    bool confirmWrite,
+    int timeoutSeconds,
+    int pollMs,
+    int holdMs,
+    int maxChildren,
+    int maxBranches)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 1, 120);
+    pollMs = Math.Clamp(pollMs, 5, 1000);
+    holdMs = Math.Clamp(holdMs, 0, 10000);
+    maxChildren = Math.Clamp(maxChildren, 16, 20000);
+    maxBranches = Math.Clamp(maxBranches, 1, 256);
+
+    var (_, inGameState, areaInstance, _) = ResolveChain(process, reader);
+    if (inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve InGameState (in game?).");
+        return 1;
+    }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.Error.WriteLine("UiRoot is null.");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge UI latch write test");
+    Console.WriteLine("-----------------------------");
+    if (areaInstance != 0) PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine("Scope        : writes catalog +0x2E8/+0x2F0 to 1, watches, restores originals.");
+    Console.WriteLine("Safety       : refuses without --confirm-write and refuses if rows are already populated.");
+    Console.WriteLine($"Timeout      : {timeoutSeconds}s");
+    Console.WriteLine($"Poll         : {pollMs}ms");
+
+    if (!confirmWrite)
+    {
+        Console.WriteLine("Refusing to write. Re-run with --confirm-write when Runeshape is closed and this is an intentional test.");
+        return 2;
+    }
+
+    if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out var parent, out var catalog, out var bonus, out var path))
+    {
+        Console.Error.WriteLine("Could not resolve the Runeshape final parent path. Open/close the panel once, then retry.");
+        return 1;
+    }
+
+    Console.WriteLine($"Resolved final parent: 0x{parent:X16}, path=[{string.Join("/", path.Select(p => p.ChildIndex))}]");
+    Console.WriteLine($"Catalog child[0]    : 0x{catalog:X16}");
+    Console.WriteLine($"Bonus child[1]      : 0x{bonus:X16}");
+
+    var before = CaptureRuneforgePopulateState(reader, catalog, maxChildren);
+    PrintRuneforgePopulateStateHeader();
+    PrintRuneforgePopulateState(0, before);
+    if (before.ChildCount > 0)
+    {
+        Console.WriteLine("Refusing to write because catalog rows are already populated. Enter a fresh map or restart the client for a clean test.");
+        return 3;
+    }
+
+    if (!reader.TryReadStruct<uint>(catalog + 0x2E8, out var original2E8) ||
+        !reader.TryReadStruct<uint>(catalog + 0x2F0, out var original2F0))
+    {
+        Console.Error.WriteLine("Could not read original latch fields.");
+        return 1;
+    }
+
+    var writeHandle = OpenWriteHandle(process.ProcessId);
+    if (writeHandle == 0)
+    {
+        Console.Error.WriteLine($"OpenProcess for write failed: {Marshal.GetLastWin32Error()}");
+        return 1;
+    }
+
+    try
+    {
+        Console.WriteLine($"Writing +0x2E8 0x{original2E8:X8}->1 and +0x2F0 0x{original2F0:X8}->1...");
+        if (!WriteUInt32(writeHandle, catalog + 0x2E8, 1) ||
+            !WriteUInt32(writeHandle, catalog + 0x2F0, 1))
+        {
+            Console.Error.WriteLine("Write failed; restoring originals.");
+            return 1;
+        }
+
+        var start = System.Diagnostics.Stopwatch.StartNew();
+        var last = CaptureRuneforgePopulateState(reader, catalog, maxChildren);
+        PrintRuneforgePopulateState(start.ElapsedMilliseconds, last);
+        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(pollMs);
+            var state = CaptureRuneforgePopulateState(reader, catalog, maxChildren);
+            if (!state.Equals(last))
+            {
+                PrintRuneforgePopulateState(start.ElapsedMilliseconds, state);
+                last = state;
+            }
+
+            if (state.ChildCount > 0 || state.VisibleRows > 0)
+                break;
+        }
+
+        if (holdMs > 0)
+            Thread.Sleep(holdMs);
+
+        Console.WriteLine(last.ChildCount > 0
+            ? "Result       : rows populated after latch write."
+            : "Result       : rows did not populate from latch write alone.");
+        return 0;
+    }
+    finally
+    {
+        WriteUInt32(writeHandle, catalog + 0x2E8, original2E8);
+        WriteUInt32(writeHandle, catalog + 0x2F0, original2F0);
+        CloseHandle(writeHandle);
+        Console.WriteLine($"Restored     : +0x2E8=0x{original2E8:X8}, +0x2F0=0x{original2F0:X8}");
+    }
+}
+
+static int RunRuneforgeSelectionSourceProbe(
+    ProcessHandle process,
+    MemoryReader reader,
+    int maxChildren,
+    int maxBranches,
+    int fieldWindow,
+    int maxEntities)
+{
+    maxChildren = Math.Clamp(maxChildren, 16, 20000);
+    maxBranches = Math.Clamp(maxBranches, 1, 256);
+    fieldWindow = Math.Clamp(fieldWindow, 0x200, 0x8000);
+    maxEntities = Math.Clamp(maxEntities, 1, 200);
+
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (inGameState == 0 || areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.Error.WriteLine("UiRoot is null.");
+        return 1;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Runeforge selection source probe");
+    Console.WriteLine("--------------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Field window : 0x{fieldWindow:X}");
+    Console.WriteLine("Goal         : use visible reward row indexes as anchors to find backing selection data.");
+
+    if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out var parent, out var catalog, out var bonus, out var path))
+    {
+        Console.Error.WriteLine("Could not resolve the Runeshape final parent path. Open Runeshape, then retry.");
+        return 1;
+    }
+
+    var rows = ReadRuneforgeCatalogRows(reader, catalog, maxChildren);
+    var visibleRows = rows.Where(r => r.Visible).ToArray();
+    Console.WriteLine($"Final parent : 0x{parent:X16}, path=[{string.Join("/", path.Select(p => p.ChildIndex))}]");
+    Console.WriteLine($"Catalog      : 0x{catalog:X16}, rows={rows.Count}, visible={visibleRows.Length}");
+    Console.WriteLine($"Bonus        : 0x{bonus:X16}");
+    if (visibleRows.Length == 0)
+    {
+        Console.WriteLine("No visible reward rows. Open Runeshape first, then rerun this probe.");
+        return 2;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Visible rewards");
+    Console.WriteLine("---------------");
+    foreach (var row in visibleRows)
+        Console.WriteLine($"  idx={row.Index,4} row=0x{row.Row:X16} flags=0x{row.Flags:X8} text='{row.Text}'");
+
+    Console.WriteLine();
+    Console.WriteLine("Visible reward row object details");
+    Console.WriteLine("---------------------------------");
+    PrintRuneforgeVisibleRowDetails(reader, visibleRows, maxChildren, Math.Min(fieldWindow, 0x1200));
+
+    var indexes = visibleRows.Select(r => r.Index).Distinct().OrderBy(x => x).ToArray();
+    Console.WriteLine();
+    Console.WriteLine("UI object index clues");
+    Console.WriteLine("---------------------");
+    PrintObjectIndexClues(reader, "catalog", catalog, fieldWindow, indexes, visibleRows.Length, rows.Count);
+    PrintObjectIndexClues(reader, "final-parent", parent, fieldWindow, indexes, visibleRows.Length, rows.Count);
+    PrintObjectIndexClues(reader, "bonus", bonus, fieldWindow, indexes, visibleRows.Length, rows.Count);
+    foreach (var node in path)
+        PrintObjectIndexClues(reader, $"path-step-{node.Step}", node.Address, Math.Min(fieldWindow, 0x1000), indexes, visibleRows.Length, rows.Count);
+
+    Console.WriteLine();
+    Console.WriteLine("Nearby Runeforge entities");
+    Console.WriteLine("-------------------------");
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    var printed = 0;
+    foreach (var entity in EnumerateRuneforgeSourceEntities(reader, areaInstance, playerGrid).Take(maxEntities))
+    {
+        Console.WriteLine();
+        Console.WriteLine(
+            $"ENTITY {entity.Source,-8} id={entity.Id,-8} addr=0x{entity.Entity:X16} " +
+            $"dist={FormatDistance(entity.Distance)} grid={FormatGrid(entity.Grid)} {entity.Metadata}");
+        var components = ReadComponentMap(reader, entity.Entity);
+        Console.WriteLine($"  comps=[{string.Join(", ", components.Select(c => c.Name))}]");
+        foreach (var component in components)
+        {
+            var interestingComponent =
+                component.Name.Equals("Stats", StringComparison.Ordinal) ||
+                component.Name.Equals("StateMachine", StringComparison.Ordinal) ||
+                component.Name.Equals("Preload", StringComparison.Ordinal) ||
+                component.Name.Equals("Inventories", StringComparison.Ordinal) ||
+                component.Name.Contains("Reward", StringComparison.OrdinalIgnoreCase) ||
+                component.Name.Contains("Rune", StringComparison.OrdinalIgnoreCase);
+            if (!interestingComponent) continue;
+
+            Console.WriteLine($"  COMPONENT {component.Name,-18} idx={component.Index,3} addr=0x{component.Address:X16}");
+            PrintObjectIndexClues(reader, $"  {component.Name}", component.Address, fieldWindow, indexes, visibleRows.Length, rows.Count);
+            PrintComponentStringMatchClues(reader, component.Address, fieldWindow, visibleRows.Select(r => r.Text).ToArray());
+        }
+
+        printed++;
+    }
+
+    if (printed == 0)
+        Console.WriteLine("  no Expedition2/RuneEncounter entities found");
+
+    Console.WriteLine();
+    Console.WriteLine("Next comparison:");
+    Console.WriteLine("  - If a component/object has the visible indexes or visible-count vector after opening, run an entry snapshot before opening and check whether the same field exists.");
+    Console.WriteLine("  - If only UI row objects contain the indexes, current rewards are probably constructed by UI code at open time.");
+    return 0;
+}
+
+static void PrintRuneforgeVisibleRowDetails(
+    MemoryReader reader,
+    IReadOnlyList<RuneforgeCatalogRow> visibleRows,
+    int maxChildren,
+    int fieldWindow)
+{
+    var rowNumber = 0;
+    foreach (var row in visibleRows.Take(12))
+    {
+        rowNumber++;
+        var label = GetUiChildAt(reader, row.Row, 0, maxChildren);
+        Console.WriteLine();
+        Console.WriteLine($"ROW {rowNumber} catalogIdx={row.Index} row=0x{row.Row:X16} visible={row.Visible} flags=0x{row.Flags:X8} text='{row.Text}'");
+        Console.WriteLine($"  row children={TryGetUiChildCount(reader, row.Row)} label=0x{label:X16}");
+        PrintUiStringBlock(reader, row.Row, "  row text");
+        PrintObjectStringSummary(reader, row.Row, "  row strings ", fieldWindow);
+        PrintNestedVectorSummary(reader, row.Row, "  row vectors ", Math.Min(fieldWindow, 0x800));
+        PrintRuneforgeKnownRowFields(reader, row.Row, row.Text, "  row known  ");
+        PrintRuneforgeUiElementPointerFields(reader, row.Row, "  row ptr    ", fieldWindow);
+
+        if (label != 0)
+        {
+            Console.WriteLine($"  LABEL 0x{label:X16} visible={ReadUiVisible(reader, label)} flags=0x{ReadUiFlags(reader, label):X8} children={TryGetUiChildCount(reader, label)}");
+            PrintUiStringBlock(reader, label, "    label text");
+            PrintObjectStringSummary(reader, label, "    label strings ", fieldWindow);
+            PrintNestedVectorSummary(reader, label, "    label vectors ", Math.Min(fieldWindow, 0x800));
+            PrintRuneforgeKnownRowFields(reader, label, row.Text, "    label known  ");
+            PrintRuneforgeUiElementPointerFields(reader, label, "    label ptr    ", fieldWindow);
+        }
+
+        var children = ReadUiChildren(reader, row.Row, Math.Min(maxChildren, 24));
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            if (child == 0) continue;
+            var strings = ReadUiStrings(reader, child).Take(8).ToArray();
+            var childCount = TryGetUiChildCount(reader, child);
+            if (strings.Length == 0 && childCount == 0 && i > 4) continue;
+            Console.WriteLine($"    child[{i,2}] 0x{child:X16} visible={ReadUiVisible(reader, child)} flags=0x{ReadUiFlags(reader, child):X8} children={childCount}");
+            foreach (var (offset, text) in strings)
+                Console.WriteLine($"      +0x{offset:X3} {text}");
+            PrintRuneforgeUiElementPointerFields(reader, child, "      ptr ", Math.Min(fieldWindow, 0x600), 4);
+        }
+    }
+}
+
+static void PrintRuneforgeKnownRowFields(MemoryReader reader, nint element, string rowText, string indent)
+{
+    foreach (var offset in new[] { 0x390, 0x3B0, 0x3B8, 0x400, 0x500, 0x510, 0x5C0, 0x618, 0x628, 0x630, 0x688, 0x6F0 })
+    {
+        if (offset == 0x390)
+        {
+            var inline = ReadStdWString(reader, element + offset);
+            if (!string.IsNullOrWhiteSpace(inline))
+                Console.WriteLine($"{indent}+0x{offset:X3} inline='{inline}'");
+        }
+
+        var ptr = SafePtr(reader, element + offset);
+        if (!IsPlausiblePointer(ptr)) continue;
+
+        var strings = ReadObjectTextClues(reader, ptr, 0x380)
+            .Where(s => LooksLikeRuneforgeKnownFieldText(s.Text, rowText))
+            .Take(14)
+            .ToArray();
+        if (strings.Length == 0 && offset is not (0x400 or 0x500 or 0x3B0 or 0x3B8))
+            continue;
+
+        Console.WriteLine($"{indent}+0x{offset:X3} ptr=0x{ptr:X16}");
+        foreach (var (kind, subOffset, text) in strings)
+            Console.WriteLine($"{indent}  {kind,-12} +0x{subOffset:X3} {text}");
+        if (strings.Length == 0)
+            PrintPointedObjectSummary(reader, ptr, indent + "  ", 0x300);
+    }
+}
+
+static IEnumerable<(string Kind, int Offset, string Text)> ReadObjectTextClues(MemoryReader reader, nint address, int window)
+{
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    for (var offset = 0; offset <= window - 8; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, address, offset))
+        {
+            if (!seen.Add(clue.Text)) continue;
+            yield return (clue.Kind, offset, clue.Text);
+        }
+    }
+}
+
+static bool LooksLikeRuneforgeKnownFieldText(string text, string rowText)
+{
+    if (string.IsNullOrWhiteSpace(text)) return false;
+    if (LooksLikeRuneforgeRewardText(text)) return true;
+    if (!string.IsNullOrWhiteSpace(rowText) && text.Contains(RewardKey(rowText), StringComparison.OrdinalIgnoreCase)) return true;
+    if (text.Contains("Slot", StringComparison.OrdinalIgnoreCase) &&
+        (text.Contains("Orb", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains("Rune", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains("Gem", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains("Alloy", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains("Flux", StringComparison.OrdinalIgnoreCase)))
+        return true;
+    if (text.Contains("Runeword", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("RecipeLabel", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("CraftingLabel", StringComparison.OrdinalIgnoreCase))
+        return true;
+    return false;
+}
+
+static void PrintRuneforgeUiElementPointerFields(
+    MemoryReader reader,
+    nint element,
+    string indent,
+    int fieldWindow,
+    int limit = 8)
+{
+    var printed = 0;
+    var seen = new HashSet<nint>();
+    for (var offset = 0; offset <= fieldWindow - IntPtr.Size && printed < limit; offset += 8)
+    {
+        var ptr = SafePtr(reader, element + offset);
+        if (!IsPlausiblePointer(ptr) || !seen.Add(ptr)) continue;
+
+        var directText = ReadStdWString(reader, ptr);
+        var nativeText = ReadNativeUtf8Text(reader, ptr);
+        var utf16 = reader.ReadStringUtf16(ptr, 96);
+        var utf8 = reader.ReadStringUtf8(ptr, 96);
+        var usefulText =
+            LooksLikeProbeText(directText) ? directText :
+            LooksLikeProbeText(nativeText) ? nativeText :
+            LooksLikeProbeText(utf16) ? utf16 :
+            LooksLikeProbeText(utf8) ? utf8 :
+            "";
+
+        if (usefulText.Length == 0 && !LooksLikeRuneforgePointerTarget(reader, ptr))
+            continue;
+
+        Console.WriteLine($"{indent}+0x{offset:X3} -> 0x{ptr:X16}{(usefulText.Length == 0 ? "" : $" text='{usefulText}'")}");
+        if (usefulText.Length == 0)
+            PrintPointedObjectSummary(reader, ptr, indent + "  ", 0x300);
+        printed++;
+    }
+}
+
+static bool LooksLikeRuneforgePointerTarget(MemoryReader reader, nint ptr)
+{
+    if (ReadEntityMetadata(reader, ptr).Contains("Rune", StringComparison.OrdinalIgnoreCase))
+        return true;
+    if (ReadEntityMetadata(reader, ptr).Contains("Expedition", StringComparison.OrdinalIgnoreCase))
+        return true;
+
+    for (var offset = 0; offset <= 0x300 - 8; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, ptr, offset))
+        {
+            if (LooksLikeRuneforgeRewardText(clue.Text) ||
+                clue.Text.Contains("Rune", StringComparison.OrdinalIgnoreCase) ||
+                clue.Text.Contains("Orb", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+    }
+
+    return false;
+}
+
+static IReadOnlyList<RuneforgeCatalogRow> ReadRuneforgeCatalogRows(MemoryReader reader, nint catalog, int maxChildren)
+{
+    var rows = new List<RuneforgeCatalogRow>();
+    if (!TryReadUiChildrenVector(reader, catalog, maxChildren, out var first, out var count)) return rows;
+    for (long i = 0; i < count; i++)
+    {
+        var row = SafePtr(reader, first + (nint)(i * 8));
+        if (row == 0) continue;
+        var flags = ReadUiFlags(reader, row);
+        var label = GetUiChildAt(reader, row, 0, maxChildren);
+        var text = label == 0 ? "" : ReadStdWString(reader, label + Poe2.Runeforge.NameWString);
+        if (string.IsNullOrWhiteSpace(text)) continue;
+        rows.Add(new RuneforgeCatalogRow((int)i, row, flags, ReadUiVisible(reader, row), text));
+    }
+    return rows;
+}
+
+static void PrintObjectIndexClues(
+    MemoryReader reader,
+    string label,
+    nint address,
+    int fieldWindow,
+    IReadOnlyList<int> visibleIndexes,
+    int visibleCount,
+    int totalRows)
+{
+    if (address == 0) return;
+    var body = new byte[fieldWindow];
+    var read = reader.TryReadBytes(address, body);
+    if (read <= 0)
+    {
+        Console.WriteLine($"  {label,-14} 0x{address:X16}: unreadable");
+        return;
+    }
+    if (read < body.Length) Array.Resize(ref body, read);
+
+    var hits = new List<string>();
+    for (var offset = 0; offset + 4 <= body.Length && hits.Count < 40; offset += 4)
+    {
+        var i32 = BitConverter.ToInt32(body, offset);
+        if (visibleIndexes.Contains(i32))
+            hits.Add($"+0x{offset:X3}=idx:{i32}");
+        else if (i32 == visibleCount)
+            hits.Add($"+0x{offset:X3}=visibleCount:{i32}");
+        else if (i32 == totalRows)
+            hits.Add($"+0x{offset:X3}=totalRows:{i32}");
+    }
+
+    var vectorHits = CaptureVectorFieldsFromBody(body, Math.Max(totalRows + 1024, 4000))
+        .Where(v => v.Count == visibleCount || v.Count == totalRows || v.Count is > 0 and <= 16)
+        .Take(12)
+        .Select(v => $"+0x{v.Offset:X3}:count={v.Count}/cap={v.Capacity}")
+        .ToArray();
+
+    Console.WriteLine($"  {label,-14} 0x{address:X16}: intHits=[{string.Join(", ", hits.Take(20))}] vectors=[{string.Join("; ", vectorHits)}]");
+}
+
+static void PrintComponentStringMatchClues(MemoryReader reader, nint component, int fieldWindow, IReadOnlyList<string> rewardTexts)
+{
+    var tokens = rewardTexts
+        .SelectMany(t => t.Split([' ', 'x', '[', ']', '|', '(', ')'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Where(t => t.Length >= 5 && !int.TryParse(t, out _))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(20)
+        .ToArray();
+    if (tokens.Length == 0) return;
+
+    var printed = 0;
+    for (var offset = 0; offset <= fieldWindow - 8 && printed < 10; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, component, offset))
+        {
+            if (!tokens.Any(t => clue.Text.Contains(t, StringComparison.OrdinalIgnoreCase))) continue;
+            Console.WriteLine($"    TEXT-MATCH {clue.Kind,-12} +0x{offset:X3} -> {clue.Text}");
+            printed++;
+            if (printed >= 10) break;
+        }
+    }
+}
+
+static int RunRuneforgeEntryKeyScan(
+    ProcessHandle process,
+    MemoryReader reader,
+    int maxEntities,
+    int componentWindow,
+    int objectWindow,
+    int vectorEntries)
+{
+    maxEntities = Math.Clamp(maxEntities, 1, 200);
+    componentWindow = Math.Clamp(componentWindow, 0x100, 0x8000);
+    objectWindow = Math.Clamp(objectWindow, 0x80, 0x2000);
+    vectorEntries = Math.Clamp(vectorEntries, 1, 256);
+
+    var (_, _, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeforge entry key scan");
+    Console.WriteLine("------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Entity cap      : {maxEntities}");
+    Console.WriteLine($"Component window: 0x{componentWindow:X}");
+    Console.WriteLine($"Object window   : 0x{objectWindow:X}");
+    Console.WriteLine($"Vector entries  : {vectorEntries}");
+    Console.WriteLine("Goal            : find Slot... reward/recipe keys before opening Runeshape.");
+
+    var printedEntities = 0;
+    var totalHits = 0;
+    foreach (var entity in EnumerateRuneforgeSourceEntities(reader, areaInstance, playerGrid)
+                 .OrderBy(e => e.Distance ?? float.MaxValue)
+                 .Take(maxEntities))
+    {
+        var components = ReadComponentMap(reader, entity.Entity);
+        var entityHits = new List<string>();
+        foreach (var component in components)
+        {
+            var hits = FindRuneforgeRecipeKeyClues(reader, component.Address, componentWindow, objectWindow, vectorEntries)
+                .Take(40)
+                .ToArray();
+            if (hits.Length == 0) continue;
+
+            entityHits.Add($"  COMPONENT {component.Name,-18} idx={component.Index,3} addr=0x{component.Address:X16}");
+            entityHits.AddRange(hits.Select(hit => $"    {hit}"));
+            totalHits += hits.Length;
+        }
+
+        if (entityHits.Count == 0) continue;
+        printedEntities++;
+        Console.WriteLine();
+        Console.WriteLine(
+            $"ENTITY {entity.Source,-8} id={entity.Id,-8} addr=0x{entity.Entity:X16} " +
+            $"dist={FormatDistance(entity.Distance)} grid={FormatGrid(entity.Grid)} {entity.Metadata}");
+        foreach (var line in entityHits)
+            Console.WriteLine(line);
+    }
+
+    Console.WriteLine();
+    Console.WriteLine($"Entities with key clues: {printedEntities}");
+    Console.WriteLine($"Total key clues        : {totalHits}");
+    if (totalHits == 0)
+    {
+        Console.WriteLine("No recipe-key-looking strings found on loaded Runeforge entities.");
+        Console.WriteLine("Run this before opening Runeshape and again after opening it; a post-open-only hit means the UI materializes the keys.");
+    }
+    return 0;
+}
+
+static IEnumerable<string> FindRuneforgeRecipeKeyClues(
+    MemoryReader reader,
+    nint component,
+    int componentWindow,
+    int objectWindow,
+    int vectorEntries)
+{
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    foreach (var clue in ReadObjectTextClues(reader, component, componentWindow))
+    {
+        if (!LooksLikeRuneforgeRecipeKeyText(clue.Text) || !seen.Add($"direct:{clue.Offset}:{clue.Text}")) continue;
+        yield return $"DIRECT {clue.Kind,-12} +0x{clue.Offset:X3} {clue.Text}";
+    }
+
+    var seenPointers = new HashSet<nint>();
+    for (var offset = 0; offset <= componentWindow - IntPtr.Size; offset += 8)
+    {
+        var ptr = SafePtr(reader, component + offset);
+        if (!IsPlausiblePointer(ptr) || !seenPointers.Add(ptr)) continue;
+        foreach (var clue in ReadObjectTextClues(reader, ptr, objectWindow))
+        {
+            if (!LooksLikeRuneforgeRecipeKeyText(clue.Text) || !seen.Add($"ptr:{offset}:{clue.Offset}:{clue.Text}")) continue;
+            yield return $"PTR    +0x{offset:X3}->0x{ptr:X16} {clue.Kind,-12} +0x{clue.Offset:X3} {clue.Text}";
+        }
+    }
+
+    for (var offset = 0; offset <= componentWindow - 0x18; offset += 8)
+    {
+        if (!reader.TryReadStruct<StdVector>(component + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x40000, out var bytes))
+            continue;
+
+        var count = bytes / 8;
+        if (count <= 0 || count > 8192) continue;
+        for (var i = 0; i < Math.Min(count, vectorEntries); i++)
+        {
+            if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var ptr) ||
+                !IsPlausiblePointer(ptr) ||
+                !seenPointers.Add(ptr))
+                continue;
+
+            foreach (var clue in ReadObjectTextClues(reader, ptr, objectWindow))
+            {
+                if (!LooksLikeRuneforgeRecipeKeyText(clue.Text) || !seen.Add($"vec:{offset}:{i}:{clue.Offset}:{clue.Text}")) continue;
+                yield return $"VECTOR +0x{offset:X3}[{i}] ->0x{ptr:X16} {clue.Kind,-12} +0x{clue.Offset:X3} {clue.Text}";
+            }
+        }
+    }
+}
+
+static bool LooksLikeRuneforgeRecipeKeyText(string text)
+{
+    if (string.IsNullOrWhiteSpace(text) || text.Length is < 6 or > 160) return false;
+    if (text.Contains('/', StringComparison.Ordinal) || text.Contains('\\', StringComparison.Ordinal)) return false;
+
+    var compact = text.Replace(" ", "", StringComparison.Ordinal);
+    if (!compact.Contains("Slot", StringComparison.OrdinalIgnoreCase)) return false;
+    return compact.Contains("Orb", StringComparison.OrdinalIgnoreCase) ||
+           compact.Contains("Rune", StringComparison.OrdinalIgnoreCase) ||
+           compact.Contains("Gem", StringComparison.OrdinalIgnoreCase) ||
+           compact.Contains("Alloy", StringComparison.OrdinalIgnoreCase) ||
+           compact.Contains("Flux", StringComparison.OrdinalIgnoreCase) ||
+           compact.Contains("Jeweller", StringComparison.OrdinalIgnoreCase) ||
+           compact.Contains("Annulment", StringComparison.OrdinalIgnoreCase);
+}
+
+static int RunRuneforgeSelectionIndexWatch(
+    ProcessHandle process,
+    MemoryReader reader,
+    int timeoutSeconds,
+    int maxEntities,
+    int componentWindow,
+    int maxChildren,
+    int maxBranches)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 5, 600);
+    maxEntities = Math.Clamp(maxEntities, 1, 200);
+    componentWindow = Math.Clamp(componentWindow, 0x100, 0x8000);
+    maxChildren = Math.Clamp(maxChildren, 100, 60000);
+    maxBranches = Math.Clamp(maxBranches, 4, 256);
+
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0 || inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeforge selection index watch");
+    Console.WriteLine("-------------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Timeout         : {timeoutSeconds}s");
+    Console.WriteLine($"Entity cap      : {maxEntities}");
+    Console.WriteLine($"Component window: 0x{componentWindow:X}");
+    Console.WriteLine("Goal            : see whether visible recipe row indexes exist before Runeshape opens.");
+
+    var before = CaptureRuneforgeComponentMemorySnapshots(reader, areaInstance, playerGrid, maxEntities, componentWindow);
+    PrintRuneforgeComponentSnapshotSummary("before", before);
+    if (before.Count == 0)
+    {
+        Console.WriteLine("No Runeforge-related entity components found.");
+        return 0;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Open Runeshape now. Waiting for visible reward rows...");
+    var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+    IReadOnlyList<RuneforgeCatalogRow> visibleRows = [];
+    nint catalog = 0;
+    while (DateTime.UtcNow < deadline)
+    {
+        Thread.Sleep(100);
+        var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+        if (uiRoot == 0) continue;
+        if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out _, out catalog, out _, out _, requireVisibleGate: true))
+            continue;
+        visibleRows = ReadRuneforgeCatalogRows(reader, catalog, maxChildren).Where(r => r.Visible).ToArray();
+        if (visibleRows.Count is > 0 and <= 24) break;
+    }
+
+    if (visibleRows.Count == 0)
+    {
+        Console.WriteLine("No visible reward rows detected before timeout.");
+        return 2;
+    }
+    if (visibleRows.Count > 24)
+    {
+        Console.WriteLine($"Visible row set looks like the master catalog ({visibleRows.Count} rows), not the selected map rewards.");
+        Console.WriteLine("Open the Runeshape reward list from a clean map-entry state and rerun; index matching was skipped to avoid false positives.");
+        return 3;
+    }
+
+    var after = CaptureRuneforgeComponentMemorySnapshots(reader, areaInstance, playerGrid, maxEntities, componentWindow);
+    PrintRuneforgeComponentSnapshotSummary("after", after);
+
+    Console.WriteLine();
+    Console.WriteLine("Visible rows after open");
+    Console.WriteLine("-----------------------");
+    var rowAnchors = visibleRows
+        .Select(r => new RuneforgeSelectionAnchor(r.Index, r.Text, ExtractRuneforgeRowRecipeKeys(reader, r.Row)))
+        .ToArray();
+    foreach (var anchor in rowAnchors)
+        Console.WriteLine($"  idx={anchor.Index,4} text='{anchor.Text}' keys=[{string.Join(" | ", anchor.Keys)}]");
+    if (rowAnchors.Any(a => a.Index is 0 or 1))
+        Console.WriteLine("  note: idx 0/1 are printed for context but ignored during component-memory matching because they are too common.");
+
+    Console.WriteLine();
+    Console.WriteLine("Before-open index hits");
+    Console.WriteLine("----------------------");
+    PrintSelectionIndexHits(before, rowAnchors, "BEFORE");
+
+    Console.WriteLine();
+    Console.WriteLine("After-open index hits");
+    Console.WriteLine("---------------------");
+    PrintSelectionIndexHits(after, rowAnchors, "AFTER");
+
+    Console.WriteLine();
+    Console.WriteLine("Changed-to-index fields");
+    Console.WriteLine("-----------------------");
+    PrintSelectionIndexTransitions(before, after, rowAnchors);
+    return 0;
+}
+
+static IReadOnlyList<RuneforgeComponentMemorySnapshot> CaptureRuneforgeComponentMemorySnapshots(
+    MemoryReader reader,
+    nint areaInstance,
+    System.Numerics.Vector2? playerGrid,
+    int maxEntities,
+    int componentWindow)
+{
+    var result = new List<RuneforgeComponentMemorySnapshot>();
+    foreach (var entity in EnumerateRuneforgeSourceEntities(reader, areaInstance, playerGrid)
+                 .OrderBy(e => e.Distance ?? float.MaxValue)
+                 .Take(maxEntities))
+    {
+        foreach (var component in ReadComponentMap(reader, entity.Entity))
+        {
+            if (component.Address == 0) continue;
+            var body = CaptureMemoryBytes(reader, component.Address, componentWindow);
+            if (body.Length == 0) continue;
+            result.Add(new RuneforgeComponentMemorySnapshot(
+                entity.Source,
+                entity.Id,
+                entity.Entity,
+                entity.Metadata,
+                entity.Distance,
+                component.Name,
+                component.Index,
+                component.Address,
+                body));
+        }
+    }
+
+    return result;
+}
+
+static void PrintRuneforgeComponentSnapshotSummary(string label, IReadOnlyList<RuneforgeComponentMemorySnapshot> snapshots)
+{
+    Console.WriteLine($"{label} component snapshot: {snapshots.Count} component(s)");
+    foreach (var group in snapshots.GroupBy(s => (s.Source, s.EntityId, s.Metadata, s.Distance)).Take(12))
+    {
+        Console.WriteLine(
+            $"  {group.Key.Source,-8} id={group.Key.EntityId,-8} dist={FormatDistance(group.Key.Distance),6} " +
+            $"components={group.Count(),2} {group.Key.Metadata}");
+    }
+}
+
+static IReadOnlyList<string> ExtractRuneforgeRowRecipeKeys(MemoryReader reader, nint row)
+{
+    var keys = new List<string>();
+    foreach (var offset in new[] { 0x500, 0x510, 0x5C0, 0x628, 0x630 })
+    {
+        var ptr = SafePtr(reader, row + offset);
+        if (!IsPlausiblePointer(ptr)) continue;
+        foreach (var clue in ReadObjectTextClues(reader, ptr, 0x500))
+            if (LooksLikeRuneforgeRecipeKeyText(clue.Text))
+                keys.Add($"+0x{offset:X3}/+0x{clue.Offset:X3}:{clue.Text}");
+    }
+    return keys.Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToArray();
+}
+
+static void PrintSelectionIndexHits(
+    IReadOnlyList<RuneforgeComponentMemorySnapshot> snapshots,
+    IReadOnlyList<RuneforgeSelectionAnchor> anchors,
+    string label)
+{
+    var indexes = anchors.Select(a => a.Index).Distinct().ToArray();
+    var anchorByIndex = anchors
+        .Where(a => a.Index > 1)
+        .GroupBy(a => a.Index)
+        .ToDictionary(g => g.Key, g => g.First().Text);
+    var printed = 0;
+    var suppressed = 0;
+    foreach (var snapshot in snapshots)
+    {
+        var hits = FindIntHits(snapshot.Body, indexes).Take(64).ToArray();
+        if (hits.Length == 0) continue;
+        var uniqueIndexes = hits.Select(h => h.Index).Distinct().Count();
+        var interactionCandidate = snapshot.ComponentName.Contains("Interaction", StringComparison.OrdinalIgnoreCase);
+        var likelyNoise =
+            (uniqueIndexes == 1 && IsLikelySelectionIndexNoise(snapshot.ComponentName, snapshot.Body, hits)) ||
+            IsSequentialCatalogIndexNoise(snapshot.ComponentName, snapshot.Body, hits);
+        if (likelyNoise && !interactionCandidate)
+        {
+            suppressed++;
+            continue;
+        }
+
+        printed++;
+        var strength = uniqueIndexes >= 2
+            ? "signal"
+            : interactionCandidate ? "weak-interaction" : "weak";
+        Console.WriteLine(
+            $"  {label} {strength,-16} {snapshot.Source,-8} id={snapshot.EntityId,-8} {snapshot.ComponentName,-22} " +
+            $"idx={snapshot.ComponentIndex,3} addr=0x{snapshot.Component:X16} unique={uniqueIndexes} " +
+            $"hits=[{string.Join(", ", hits.Take(24).Select(FormatSelectionIndexHit))}]");
+        if (uniqueIndexes >= 2 || interactionCandidate)
+            PrintSelectionIndexHitContext(snapshot.Body, hits, anchorByIndex);
+        if (printed >= 40)
+        {
+            Console.WriteLine("  ...additional hits omitted");
+            break;
+        }
+    }
+
+    if (printed == 0)
+        Console.WriteLine("  no strong visible row index hits found in captured component bodies");
+    if (suppressed > 0)
+        Console.WriteLine($"  suppressed {suppressed} likely-noise single-index component hit(s)");
+}
+
+static bool IsLikelySelectionIndexNoise(string componentName, byte[] body, IReadOnlyList<RuneforgeIndexHit> hits)
+{
+    if (hits.Count == 0) return false;
+    if (componentName is "Life" or "Functions" or "DiesAfterTime") return true;
+    if (hits.Count < 3) return false;
+
+    var firstIndex = hits[0].Index;
+    if (hits.Any(h => h.Index != firstIndex)) return false;
+
+    var deltas = hits.Zip(hits.Skip(1), (a, b) => b.Offset - a.Offset).ToArray();
+    return deltas.Length > 0 && deltas.Distinct().Count() <= 2;
+}
+
+static bool IsSequentialCatalogIndexNoise(string componentName, byte[] body, IReadOnlyList<RuneforgeIndexHit> hits)
+{
+    if (hits.Count == 0) return false;
+    if (componentName is not "Functions" and not "Life" and not "DiesAfterTime") return false;
+
+    var sequentialHits = 0;
+    foreach (var hit in hits)
+    {
+        if (HasSequentialIndexNeighbor(body, hit.Offset, hit.Index, -8, -1) &&
+            HasSequentialIndexNeighbor(body, hit.Offset, hit.Index, 8, 1))
+            sequentialHits++;
+    }
+
+    return sequentialHits == hits.Count;
+}
+
+static bool HasSequentialIndexNeighbor(byte[] body, int offset, int value, int deltaOffset, int deltaValue)
+{
+    var neighborOffset = offset + deltaOffset;
+    if (neighborOffset < 0 || neighborOffset + 4 > body.Length) return false;
+    return BitConverter.ToInt32(body, neighborOffset) == value + deltaValue;
+}
+
+static string FormatSelectionIndexHit(RuneforgeIndexHit hit) => $"+0x{hit.Offset:X3}=idx:{hit.Index}";
+
+static void PrintSelectionIndexHitContext(
+    byte[] body,
+    IReadOnlyList<RuneforgeIndexHit> hits,
+    IReadOnlyDictionary<int, string> anchorByIndex)
+{
+    foreach (var hit in hits.Take(6))
+    {
+        var row = anchorByIndex.TryGetValue(hit.Index, out var text) ? text : "?";
+        var start = Math.Max(0, hit.Offset - 0x10) & ~0x3;
+        var end = Math.Min(body.Length - 4, hit.Offset + 0x10);
+        var values = new List<string>();
+        for (var offset = start; offset <= end; offset += 4)
+        {
+            var value = BitConverter.ToInt32(body, offset);
+            var marker = offset == hit.Offset ? "*" : "";
+            values.Add($"{marker}+0x{offset:X3}:{value}{marker}");
+        }
+        Console.WriteLine($"    ctx idx:{hit.Index} '{row}' -> {string.Join(" ", values)}");
+    }
+}
+
+static IEnumerable<RuneforgeIndexHit> FindIntHits(byte[] body, IReadOnlyList<int> indexes)
+{
+    var usefulIndexes = indexes.Where(i => i > 1).Distinct().ToHashSet();
+    if (usefulIndexes.Count == 0)
+        yield break;
+
+    for (var offset = 0; offset + 4 <= body.Length; offset += 4)
+    {
+        var value = BitConverter.ToInt32(body, offset);
+        if (usefulIndexes.Contains(value))
+            yield return new RuneforgeIndexHit(offset, value);
+    }
+}
+
+static void PrintSelectionIndexTransitions(
+    IReadOnlyList<RuneforgeComponentMemorySnapshot> before,
+    IReadOnlyList<RuneforgeComponentMemorySnapshot> after,
+    IReadOnlyList<RuneforgeSelectionAnchor> anchors)
+{
+    var indexes = anchors.Select(a => a.Index).Where(i => i > 1).Distinct().ToHashSet();
+    if (indexes.Count == 0)
+    {
+        Console.WriteLine("  no useful visible row indexes to test (idx 0/1 are intentionally ignored)");
+        return;
+    }
+
+    var beforeMap = before.ToDictionary(s => (s.EntityId, s.ComponentName, s.ComponentIndex));
+    var printed = 0;
+    foreach (var a in after)
+    {
+        if (!beforeMap.TryGetValue((a.EntityId, a.ComponentName, a.ComponentIndex), out var b))
+            continue;
+        var min = Math.Min(a.Body.Length, b.Body.Length);
+        var hits = new List<string>();
+        for (var offset = 0; offset + 4 <= min && hits.Count < 24; offset += 4)
+        {
+            var beforeValue = BitConverter.ToInt32(b.Body, offset);
+            var afterValue = BitConverter.ToInt32(a.Body, offset);
+            if (beforeValue == afterValue || !indexes.Contains(afterValue)) continue;
+            hits.Add($"+0x{offset:X3}:{beforeValue}->idx:{afterValue}");
+        }
+        if (hits.Count == 0) continue;
+
+        printed++;
+        Console.WriteLine(
+            $"  {a.Source,-8} id={a.EntityId,-8} {a.ComponentName,-22} idx={a.ComponentIndex,3} " +
+            $"addr=0x{a.Component:X16} transitions=[{string.Join(", ", hits)}]");
+        if (printed >= 40)
+        {
+            Console.WriteLine("  ...additional transitions omitted");
+            break;
+        }
+    }
+
+    if (printed == 0)
+        Console.WriteLine("  no component fields changed to visible row indexes");
+}
+
+static int RunRuneforgeInteractionBlockProbe(
+    ProcessHandle process,
+    MemoryReader reader,
+    int timeoutSeconds,
+    int maxEntities,
+    int componentWindow,
+    int maxChildren,
+    int maxBranches)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 5, 600);
+    maxEntities = Math.Clamp(maxEntities, 1, 200);
+    componentWindow = Math.Clamp(componentWindow, 0x100, 0x8000);
+    maxChildren = Math.Clamp(maxChildren, 100, 60000);
+    maxBranches = Math.Clamp(maxBranches, 4, 256);
+
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0 || inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeforge InteractionAction block probe");
+    Console.WriteLine("---------------------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Timeout         : {timeoutSeconds}s");
+    Console.WriteLine($"Entity cap      : {maxEntities}");
+    Console.WriteLine($"Component window: 0x{componentWindow:X}");
+    Console.WriteLine("Goal            : inspect pre-open InteractionAction blocks that contain selected row indexes.");
+
+    var before = CaptureRuneforgeComponentMemorySnapshots(reader, areaInstance, playerGrid, maxEntities, componentWindow)
+        .Where(s => s.ComponentName.Contains("Interaction", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+    PrintRuneforgeComponentSnapshotSummary("before InteractionAction", before);
+    if (before.Length == 0)
+    {
+        Console.WriteLine("No InteractionAction component found on loaded Runeforge entities.");
+        return 0;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Open Runeshape now. Waiting for visible reward rows...");
+    var visibleRows = WaitForRuneforgeVisibleRows(reader, inGameState, timeoutSeconds, maxChildren, maxBranches, out _);
+    if (visibleRows.Count == 0)
+    {
+        Console.WriteLine("No visible reward rows detected before timeout.");
+        return 2;
+    }
+    if (visibleRows.Count > 24)
+    {
+        Console.WriteLine($"Visible row set looks like the master catalog ({visibleRows.Count} rows), not the selected map rewards.");
+        return 3;
+    }
+
+    var anchors = visibleRows
+        .Select(r => new RuneforgeSelectionAnchor(r.Index, r.Text, ExtractRuneforgeRowRecipeKeys(reader, r.Row)))
+        .ToArray();
+    var anchorByIndex = anchors
+        .Where(a => a.Index > 1)
+        .GroupBy(a => a.Index)
+        .ToDictionary(g => g.Key, g => g.First().Text);
+
+    Console.WriteLine();
+    Console.WriteLine("Visible selected rows");
+    Console.WriteLine("---------------------");
+    foreach (var anchor in anchors)
+        Console.WriteLine($"  idx={anchor.Index,4} text='{anchor.Text}'");
+
+    Console.WriteLine();
+    Console.WriteLine("InteractionAction pre-open blocks");
+    Console.WriteLine("---------------------------------");
+    var printed = 0;
+    foreach (var snapshot in before)
+    {
+        var hits = FindIntHits(snapshot.Body, anchors.Select(a => a.Index).Distinct().ToArray()).ToArray();
+        if (hits.Length == 0) continue;
+
+        printed++;
+        Console.WriteLine(
+            $"{snapshot.Source,-8} id={snapshot.EntityId,-8} component=0x{snapshot.Component:X16} " +
+            $"idx={snapshot.ComponentIndex} hits={hits.Length}");
+
+        foreach (var hit in hits.Take(16))
+            PrintInteractionCandidateBlock(snapshot.Body, hit, anchorByIndex);
+    }
+
+    if (printed == 0)
+        Console.WriteLine("  no selected row indexes found inside pre-open InteractionAction bodies");
+
+    Console.WriteLine();
+    Console.WriteLine("Read-only interpretation:");
+    Console.WriteLine("  - repeated identical blocks at different offsets are likely action templates/caches.");
+    Console.WriteLine("  - non-sequential selected indexes grouped near other nonzero fields are better reward-state candidates.");
+    Console.WriteLine("  - if only one selected index appears, gather more samples before treating it as a real source.");
+    return 0;
+}
+
+static IReadOnlyList<RuneforgeCatalogRow> WaitForRuneforgeVisibleRows(
+    MemoryReader reader,
+    nint inGameState,
+    int timeoutSeconds,
+    int maxChildren,
+    int maxBranches,
+    out nint catalog)
+{
+    var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+    catalog = 0;
+    while (DateTime.UtcNow < deadline)
+    {
+        Thread.Sleep(100);
+        var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+        if (uiRoot == 0) continue;
+        if (!TryResolveRuneforgeCatalogSlot(reader, uiRoot, maxChildren, maxBranches, out _, out catalog, out _, out _, requireVisibleGate: true))
+            continue;
+        var rows = ReadRuneforgeCatalogRows(reader, catalog, maxChildren).Where(r => r.Visible).ToArray();
+        if (rows.Length is > 0 and <= 24) return rows;
+        if (rows.Length > 24) return rows;
+    }
+
+    return [];
+}
+
+static void PrintInteractionCandidateBlock(
+    byte[] body,
+    RuneforgeIndexHit hit,
+    IReadOnlyDictionary<int, string> anchorByIndex)
+{
+    var row = anchorByIndex.TryGetValue(hit.Index, out var text) ? text : "?";
+    var blockStart = Math.Max(0, hit.Offset - 0x20) & ~0xF;
+    var blockEnd = Math.Min(body.Length - 4, hit.Offset + 0x40);
+    Console.WriteLine($"  hit +0x{hit.Offset:X3}=idx:{hit.Index} '{row}' block=+0x{blockStart:X3}..+0x{blockEnd:X3}");
+
+    for (var offset = blockStart; offset <= blockEnd; offset += 0x10)
+    {
+        var parts = new List<string>();
+        for (var inner = 0; inner < 0x10 && offset + inner + 4 <= body.Length; inner += 4)
+        {
+            var fieldOffset = offset + inner;
+            var value = BitConverter.ToInt32(body, fieldOffset);
+            var marker = fieldOffset == hit.Offset ? "*" : " ";
+            parts.Add($"{marker}+0x{fieldOffset:X3}:{value,11}{marker}");
+        }
+        Console.WriteLine("    " + string.Join(" ", parts));
+    }
+}
+
+static int RunRuneforgeSelectionFingerprintWatch(
+    ProcessHandle process,
+    MemoryReader reader,
+    int timeoutSeconds,
+    int maxEntities,
+    int componentWindow,
+    int objectWindow,
+    int pointerDepth,
+    int maxChildren,
+    int maxBranches)
+{
+    timeoutSeconds = Math.Clamp(timeoutSeconds, 5, 600);
+    maxEntities = Math.Clamp(maxEntities, 1, 200);
+    componentWindow = Math.Clamp(componentWindow, 0x100, 0x10000);
+    objectWindow = Math.Clamp(objectWindow, 0x100, 0x8000);
+    pointerDepth = Math.Clamp(pointerDepth, 0, 3);
+    maxChildren = Math.Clamp(maxChildren, 100, 60000);
+    maxBranches = Math.Clamp(maxBranches, 4, 256);
+
+    var (_, inGameState, areaInstance, localPlayer) = ResolveChain(process, reader);
+    if (areaInstance == 0 || inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeforge selection fingerprint watch");
+    Console.WriteLine("-------------------------------------");
+    PrintAreaInfo(reader, areaInstance);
+    Console.WriteLine($"Timeout         : {timeoutSeconds}s");
+    Console.WriteLine($"Entity cap      : {maxEntities}");
+    Console.WriteLine($"Component window: 0x{componentWindow:X}");
+    Console.WriteLine($"Object window   : 0x{objectWindow:X}");
+    Console.WriteLine($"Pointer depth   : {pointerDepth}");
+    Console.WriteLine("Goal            : correlate selected rewards against pre-open component/object memory.");
+
+    var beforeComponents = CaptureRuneforgeComponentMemorySnapshots(reader, areaInstance, playerGrid, maxEntities, componentWindow);
+    PrintRuneforgeComponentSnapshotSummary("before", beforeComponents);
+    if (beforeComponents.Count == 0)
+    {
+        Console.WriteLine("No Runeforge-related entity components found.");
+        return 0;
+    }
+
+    var beforeBlocks = BuildRuneforgeFingerprintBlocks(reader, beforeComponents, objectWindow, pointerDepth);
+    Console.WriteLine($"Pre-open blocks : {beforeBlocks.Count} ({beforeComponents.Count} component bodies + reachable pointer objects)");
+
+    Console.WriteLine();
+    Console.WriteLine("Open Runeshape now. Waiting for visible reward rows...");
+    var visibleRows = WaitForRuneforgeVisibleRows(reader, inGameState, timeoutSeconds, maxChildren, maxBranches, out _);
+    if (visibleRows.Count == 0)
+    {
+        Console.WriteLine("No visible reward rows detected before timeout.");
+        return 2;
+    }
+    if (visibleRows.Count > 24)
+    {
+        Console.WriteLine($"Visible row set looks like the master catalog ({visibleRows.Count} rows), not the selected map rewards.");
+        return 3;
+    }
+
+    var anchors = visibleRows
+        .Select(r => new RuneforgeSelectionAnchor(r.Index, r.Text, ExtractRuneforgeRowRecipeKeys(reader, r.Row)))
+        .ToArray();
+    var indexes = anchors.Select(a => a.Index).Where(i => i > 1).Distinct().OrderBy(i => i).ToArray();
+    var anchorByIndex = anchors
+        .Where(a => a.Index > 1)
+        .GroupBy(a => a.Index)
+        .ToDictionary(g => g.Key, g => g.First().Text);
+
+    Console.WriteLine();
+    Console.WriteLine("Visible selected rows");
+    Console.WriteLine("---------------------");
+    foreach (var anchor in anchors)
+        Console.WriteLine($"  idx={anchor.Index,4} text='{anchor.Text}' keys=[{string.Join(" | ", anchor.Keys)}]");
+
+    if (indexes.Length == 0)
+    {
+        Console.WriteLine("No useful row indexes to correlate (idx 0/1 ignored).");
+        return 0;
+    }
+
+    var candidates = new List<RuneforgeFingerprintCandidate>();
+    foreach (var block in beforeBlocks)
+    {
+        candidates.AddRange(FindRawIntFingerprintCandidates(block, indexes));
+        candidates.AddRange(FindPackedUShortFingerprintCandidates(block, indexes));
+        candidates.AddRange(FindPackedByteFingerprintCandidates(block, indexes));
+        candidates.AddRange(FindBitsetFingerprintCandidates(block, indexes));
+    }
+
+    var ranked = candidates
+        .Where(c => c.MatchedIndexes.Count > 0)
+        .GroupBy(c => $"{c.Kind}|{c.Block.Source}|{c.Block.EntityId}|{c.Block.ComponentName}|{c.Block.ComponentIndex}|{c.Block.Path}|{c.Offset:X}")
+        .Select(g => g.OrderByDescending(c => c.Score).First())
+        .OrderByDescending(c => c.Score)
+        .ThenByDescending(c => c.MatchedIndexes.Count)
+        .ThenBy(c => c.Block.EntityId)
+        .ThenBy(c => c.Block.ComponentName, StringComparer.Ordinal)
+        .Take(40)
+        .ToArray();
+
+    Console.WriteLine();
+    Console.WriteLine("Fingerprint candidates");
+    Console.WriteLine("----------------------");
+    if (ranked.Length == 0)
+    {
+        Console.WriteLine("  no pre-open fingerprint matches found");
+    }
+    else
+    {
+        foreach (var candidate in ranked)
+            PrintFingerprintCandidate(candidate, anchorByIndex);
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Read-only interpretation:");
+    Console.WriteLine("  - int/ushort/byte hits show literal or packed row ids.");
+    Console.WriteLine("  - bitset hits suggest selected rows may be stored as flags rather than ids.");
+    Console.WriteLine("  - component-path hits are stronger than deep pointer hits unless repeated across maps.");
+    Console.WriteLine("  - one-index matches are weak; multi-index matches across unrelated row numbers are the prize.");
+    return 0;
+}
+
+static int RunMonolith(ProcessHandle process, MemoryReader reader)
+{
+    var slot = FindGameStateSlot(process, reader);
+    if (slot == 0)
+    {
+        Console.Error.WriteLine("Could not lock GameState slot (in game?).");
+        return 1;
+    }
+
+    var live = new Poe2Live(reader, slot);
+    if (!live.TryResolve(out _, out var areaInstance, out var localPlayer))
+    {
+        Console.Error.WriteLine("Could not resolve area.");
+        return 1;
+    }
+
+    var catalog = RuneMonolithCatalog.Instance;
+    var areaLevel = live.AreaLevel(areaInstance);
+    var playerGrid = ReadEntityGrid(reader, localPlayer);
+
+    Console.WriteLine();
+    Console.WriteLine("Runeshape monolith probe");
+    Console.WriteLine("------------------------");
+    Console.WriteLine($"AreaInfo     : code='{live.AreaCode(areaInstance)}' level={areaLevel} hash=0x{live.AreaHash(areaInstance):X8}");
+    Console.WriteLine($"Catalog      : loaded={catalog.IsLoaded}");
+    Console.WriteLine($"Player grid  : {FormatGrid(playerGrid)}");
+    Console.WriteLine("Goal         : validate Expedition2Encounter -> StateMachine -> RuneStation reward state.\n");
+
+    var devices = new List<(uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float Distance)>();
+    foreach (var mapOffset in new[] { Poe2.AreaInstance.AwakeEntities, Poe2.AreaInstance.SleepingEntities })
+    foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+    {
+        if (!metadata.Contains("Expedition2Encounter", StringComparison.OrdinalIgnoreCase)) continue;
+        var grid = ReadEntityGrid(reader, entity);
+        var distance = playerGrid.HasValue && grid.HasValue
+            ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+            : float.MaxValue;
+        devices.Add((id, entity, metadata, grid, distance));
+    }
+
+    devices.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+    Console.WriteLine($"Devices      : {devices.Count}\n");
+    foreach (var device in devices)
+    {
+        var monolith = live.ReadMonolith(device.Entity);
+        var distText = device.Distance == float.MaxValue ? "-" : device.Distance.ToString("F1");
+        Console.WriteLine($"ENTITY id={device.Id} addr=0x{device.Entity:X16} dist={distText} grid={FormatGrid(device.Grid)}");
+        Console.WriteLine($"  meta={device.Metadata}");
+        if (!monolith.Resolved)
+        {
+            Console.WriteLine($"  station: unresolved collected={monolith.Collected}");
+            continue;
+        }
+
+        var anchor = monolith.IsUnique
+            ? "unique/anchorless"
+            : monolith.AnchorIdx >= 0
+                ? $"{catalog.RuneName(monolith.AnchorIdx)} idx={monolith.AnchorIdx} pos={monolith.AnchorPos + 1}"
+                : $"decode-failed pos={monolith.AnchorPos + 1}";
+        Console.WriteLine($"  station: holes={monolith.HoleCount} anchor={anchor} collected={monolith.Collected}");
+
+        var offers = catalog.Offers(monolith.AnchorIdx, monolith.AnchorPos, monolith.HoleCount, monolith.IsUnique, areaLevel);
+        Console.WriteLine($"  offers={offers.Count}");
+        foreach (var offer in offers.Take(50))
+        {
+            var name = string.IsNullOrWhiteSpace(offer.Name) ? $"({offer.Description})" : offer.Name;
+            Console.WriteLine($"    size={offer.Size} count={offer.Count} {name} [{offer.Runes}]");
+        }
+    }
+
+    return 0;
+}
+
+static int RunRitualShop(ProcessHandle process, MemoryReader reader)
+{
+    var slot = FindGameStateSlot(process, reader);
+    if (slot == 0)
+    {
+        Console.Error.WriteLine("Could not lock GameState slot (in game?).");
+        return 1;
+    }
+
+    var live = new Poe2Live(reader, slot);
+    if (!live.TryResolve(out var inGameState, out _, out _))
+    {
+        Console.Error.WriteLine("Could not resolve InGameState.");
+        return 1;
+    }
+
+    var (winW, winH) = GetClientSize(process);
+    var rewards = live.ReadRitualRewards(inGameState, winW, winH);
+    Console.WriteLine();
+    Console.WriteLine("Ritual shop reward probe");
+    Console.WriteLine("------------------------");
+    Console.WriteLine($"Window       : {winW:0}x{winH:0}");
+    Console.WriteLine($"Rewards      : {rewards.Count}");
+    Console.WriteLine("Goal         : validate Sikaka-style UiElement tile +0x4F8 reward item reads.\n");
+    foreach (var reward in rewards)
+    {
+        Console.WriteLine($"  {reward.Rarity,-10} {(reward.Identified ? "id" : "unid"),4} art={reward.Art ?? "-",-24} name='{reward.Name ?? "-"}' rect=({reward.X:0},{reward.Y:0} {reward.W:0}x{reward.H:0})");
+    }
+    if (rewards.Count == 0)
+        Console.WriteLine("  none: open the Ritual tribute shop before running this probe.");
+    return 0;
+}
+
+static int RunAtlasMapName(ProcessHandle process, MemoryReader reader, int maxDistinct)
+{
+    var (_, inGameState, _, _) = ResolveChain(process, reader);
+    if (inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var uiRoot = SafePtr(reader, inGameState + Poe2.InGameState.UiRoot);
+    if (uiRoot == 0)
+    {
+        Console.Error.WriteLine("Could not resolve UiRoot.");
+        return 1;
+    }
+
+    var root = SafePtr(reader, uiRoot + Poe2.UiElement.Parent);
+    if (root == 0) root = uiRoot;
+
+    Console.WriteLine();
+    Console.WriteLine("Atlas map-name probe");
+    Console.WriteLine("--------------------");
+    Console.WriteLine("Goal: verify localized WorldAreas+0x08 map names from Atlas nodes. Open Atlas before running.\n");
+
+    var queue = new Queue<nint>();
+    var visited = new HashSet<nint>();
+    var seenCodes = new HashSet<string>(StringComparer.Ordinal);
+    queue.Enqueue(root);
+    var shown = 0;
+
+    while (queue.Count > 0 && visited.Count < 200000 && shown < maxDistinct)
+    {
+        var element = queue.Dequeue();
+        if (element == 0 || !visited.Add(element)) continue;
+        if (SafePtr(reader, element + Poe2.UiElement.Self) != element) continue;
+
+        foreach (var child in ReadUiChildren(reader, element, 16384))
+            queue.Enqueue(child);
+
+        var row = SafePtr(reader, element + Poe2.AtlasNode.MapNodeId);
+        if (row == 0) continue;
+
+        var areaRow = SafePtr(reader, row);
+        var codePtr = areaRow == 0 ? 0 : SafePtr(reader, areaRow);
+        var namePtr = areaRow == 0 ? 0 : SafePtr(reader, areaRow + Poe2.AtlasMapRow.WorldAreaName);
+        var code = codePtr == 0 ? "" : reader.ReadStringUtf16(codePtr, 80);
+        if (!code.StartsWith("Map", StringComparison.Ordinal) || !seenCodes.Add(code)) continue;
+
+        var displayName = namePtr == 0 ? "" : reader.ReadStringUtf16(namePtr, 80);
+        shown++;
+        Console.WriteLine($"  element=0x{element:X16} row=0x{row:X16} areaRow=0x{areaRow:X16}");
+        Console.WriteLine($"    code='{code}' resolved='{displayName}' prettified='{PrettifyMapCode(code)}'");
+    }
+
+    Console.WriteLine($"\nDisplayed {shown} distinct map node(s).");
+    return 0;
+}
+
+static int RunAtlasGraph(ProcessHandle process, MemoryReader reader)
+{
+    var (_, inGameState, _, _) = ResolveChain(process, reader);
+    if (inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var atlas = new Poe2Atlas(reader);
+    var nodes = atlas.ReadNodes(inGameState);
+    var current = atlas.CurrentNodeGrid();
+    var graphNodes = atlas.GraphNodeCount;
+
+    Console.WriteLine();
+    Console.WriteLine("Atlas graph probe");
+    Console.WriteLine("-----------------");
+    Console.WriteLine("Goal: validate Sikaka-style live Atlas graph/current-marker path data. Open Atlas before running.\n");
+    Console.WriteLine($"Panel open    : {atlas.LastPanelOpen}");
+    Console.WriteLine($"Load status   : {atlas.LoadStatus}");
+    Console.WriteLine($"Load progress : {atlas.LoadProgress:P0}");
+    Console.WriteLine($"Nodes read    : {nodes.Count}");
+    Console.WriteLine($"Graph nodes   : {graphNodes}");
+    Console.WriteLine($"Current grid  : {(current.HasValue ? $"{current.Value.X},{current.Value.Y}" : "-")}");
+
+    if (nodes.Count == 0)
+    {
+        Console.WriteLine("\nNo nodes read. Open the Atlas map and rerun.");
+        return 0;
+    }
+
+    var visible = nodes.Count(n => n.Visible);
+    var unlocked = nodes.Count(n => n.Unlocked);
+    var visited = nodes.Count(n => n.Visited);
+    var content = nodes.Count(n => n.HasContent);
+    Console.WriteLine($"Visible       : {visible}");
+    Console.WriteLine($"Unlocked      : {unlocked}");
+    Console.WriteLine($"Visited       : {visited}");
+    Console.WriteLine($"Content       : {content}");
+
+    var start = current ?? nodes.FirstOrDefault(n => atlas.GraphHas(n.Grid)).Grid;
+    var target = nodes
+        .Where(n => n.Grid != start && atlas.GraphHas(n.Grid))
+        .OrderByDescending(n => n.HasContent)
+        .ThenBy(n => n.Visited)
+        .FirstOrDefault();
+
+    if (!atlas.GraphHas(start))
+    {
+        Console.WriteLine("\nCurrent/start node is not in the graph. This usually means the graph vector was not detected.");
+        return 0;
+    }
+
+    if (target.Element == 0)
+    {
+        Console.WriteLine("\nNo separate graph-backed target node found for path test.");
+        return 0;
+    }
+
+    var path = atlas.FindPath(start, target.Grid);
+    Console.WriteLine();
+    Console.WriteLine("Sample route");
+    Console.WriteLine("------------");
+    Console.WriteLine($"Start : {start.X},{start.Y}");
+    Console.WriteLine($"Target: {target.GridX},{target.GridY} '{target.MapName}' tags=[{string.Join(", ", target.Tags)}]");
+    Console.WriteLine(path is null
+        ? "Path   : none"
+        : $"Path   : {path.Count} node(s) {string.Join(" -> ", path.Take(12).Select(p => $"{p.X},{p.Y}"))}{(path.Count > 12 ? " -> ..." : "")}");
+    return 0;
+}
+
+static int RunAtlasCurrent(ProcessHandle process, MemoryReader reader)
+{
+    var (_, inGameState, areaInstance, _) = ResolveChain(process, reader);
+    if (inGameState == 0)
+    {
+        Console.Error.WriteLine("Could not resolve chain (in game?).");
+        return 1;
+    }
+
+    var live = new Poe2Live(reader, 0);
+    var atlas = new Poe2Atlas(reader);
+    var nodes = atlas.ReadNodes(inGameState);
+    var current = atlas.CurrentNodeGrid();
+    var currentNode = current.HasValue
+        ? nodes.FirstOrDefault(n => n.Grid == current.Value)
+        : default;
+
+    Console.WriteLine();
+    Console.WriteLine("Atlas current-marker probe");
+    Console.WriteLine("--------------------------");
+    Console.WriteLine("Goal: validate the structural current-location marker used for atlas routing.\n");
+    Console.WriteLine($"Area code     : {live.AreaCode(areaInstance)}");
+    Console.WriteLine($"Panel open    : {atlas.LastPanelOpen}");
+    Console.WriteLine($"Nodes read    : {nodes.Count}");
+    Console.WriteLine($"Graph nodes   : {atlas.GraphNodeCount}");
+    Console.WriteLine($"Current grid  : {(current.HasValue ? $"{current.Value.X},{current.Value.Y}" : "-")}");
+
+    if (currentNode.Element != 0)
+    {
+        Console.WriteLine($"Current node  : 0x{currentNode.Element:X16}");
+        Console.WriteLine($"Map name      : {currentNode.MapName}");
+        Console.WriteLine($"Map source    : {currentNode.MapSource}");
+        Console.WriteLine($"State/flags   : state={currentNode.State} flags=0x{currentNode.Flags:X2} completion={currentNode.Completion}");
+        Console.WriteLine($"Tags          : [{string.Join(", ", currentNode.Tags)}]");
+    }
+    else if (current.HasValue)
+    {
+        Console.WriteLine("Current marker resolved a grid, but that grid was not present in the current node snapshot.");
+    }
+    else
+    {
+        Console.WriteLine("Current marker not resolved. Open Atlas and make sure the player/current-map marker is visible.");
+    }
+
+    return 0;
+}
+
+static int RunAtlasMarker(ProcessHandle process, MemoryReader reader) => RunAtlasCurrent(process, reader);
+
+static (float Width, float Height) GetClientSize(ProcessHandle process)
+{
+    _ = process;
+    var hwnd = Win.GetForegroundWindow();
+    if (hwnd != 0 && Win.GetClientRect(hwnd, out var rect) && rect.right > 0 && rect.bottom > 0)
+        return (rect.right, rect.bottom);
+    return (1920, 1080);
+}
+
+static string PrettifyMapCode(string code)
+{
+    if (string.IsNullOrWhiteSpace(code)) return "";
+    var value = code.StartsWith("Map", StringComparison.Ordinal) ? code[3..] : code;
+    if (value.Length == 0) return code;
+
+    var output = new System.Text.StringBuilder(value.Length + 8);
+    for (var i = 0; i < value.Length; i++)
+    {
+        var c = value[i];
+        if (i > 0 && char.IsUpper(c) && !char.IsUpper(value[i - 1]))
+            output.Append(' ');
+        output.Append(c);
+    }
+    return output.ToString().Replace('_', ' ').Trim();
+}
+
+static IReadOnlyList<RuneforgeFingerprintBlock> BuildRuneforgeFingerprintBlocks(
+    MemoryReader reader,
+    IReadOnlyList<RuneforgeComponentMemorySnapshot> components,
+    int objectWindow,
+    int pointerDepth)
+{
+    var blocks = new List<RuneforgeFingerprintBlock>();
+    var seen = new HashSet<nint>();
+    foreach (var component in components)
+    {
+        blocks.Add(new RuneforgeFingerprintBlock(
+            component.Source,
+            component.EntityId,
+            component.ComponentName,
+            component.ComponentIndex,
+            component.Component,
+            "component",
+            component.Body));
+
+        if (pointerDepth <= 0) continue;
+        foreach (var pointerBlock in CaptureReachablePointerBlocks(
+                     reader,
+                     component.Source,
+                     component.EntityId,
+                     component.ComponentName,
+                     component.ComponentIndex,
+                     component.Body,
+                     component.Component,
+                     objectWindow,
+                     pointerDepth,
+                     seen,
+                     $"component[{component.ComponentName}]"))
+            blocks.Add(pointerBlock);
+    }
+
+    return blocks;
+}
+
+static IEnumerable<RuneforgeFingerprintBlock> CaptureReachablePointerBlocks(
+    MemoryReader reader,
+    string source,
+    uint entityId,
+    string componentName,
+    int componentIndex,
+    byte[] ownerBody,
+    nint ownerBase,
+    int objectWindow,
+    int depth,
+    HashSet<nint> seen,
+    string path)
+{
+    if (depth <= 0) yield break;
+
+    var emitted = 0;
+    for (var offset = 0; offset + IntPtr.Size <= ownerBody.Length && emitted < 64; offset += 8)
+    {
+        var pointer = IntPtr.Size == 8
+            ? (nint)BitConverter.ToInt64(ownerBody, offset)
+            : (nint)BitConverter.ToInt32(ownerBody, offset);
+        if (!IsPlausiblePointer(pointer) || !seen.Add(pointer)) continue;
+
+        var body = CaptureMemoryBytes(reader, pointer, objectWindow);
+        if (body.Length < 0x20) continue;
+
+        emitted++;
+        var childPath = $"{path}+0x{offset:X3}->0x{pointer:X16}";
+        yield return new RuneforgeFingerprintBlock(source, entityId, componentName, componentIndex, pointer, childPath, body);
+
+        if (depth <= 1) continue;
+        foreach (var child in CaptureReachablePointerBlocks(
+                     reader,
+                     source,
+                     entityId,
+                     componentName,
+                     componentIndex,
+                     body,
+                     pointer,
+                     objectWindow,
+                     depth - 1,
+                     seen,
+                     childPath))
+            yield return child;
+    }
+}
+
+static IEnumerable<RuneforgeFingerprintCandidate> FindRawIntFingerprintCandidates(
+    RuneforgeFingerprintBlock block,
+    IReadOnlyList<int> indexes)
+{
+    var hits = FindIntHits(block.Body, indexes).ToArray();
+    foreach (var group in hits.GroupBy(h => h.Offset & ~0x3F))
+    {
+        var matched = group.Select(h => h.Index).Distinct().OrderBy(i => i).ToArray();
+        if (matched.Length == 0) continue;
+        yield return new RuneforgeFingerprintCandidate(
+            "int32-window",
+            block,
+            group.Key,
+            matched,
+            group.Select(FormatSelectionIndexHit).Take(12).ToArray(),
+            ScoreFingerprint(block, "int32-window", matched.Length));
+    }
+}
+
+static IEnumerable<RuneforgeFingerprintCandidate> FindPackedUShortFingerprintCandidates(
+    RuneforgeFingerprintBlock block,
+    IReadOnlyList<int> indexes)
+{
+    var set = indexes.Where(i => i is > 1 and <= ushort.MaxValue).ToHashSet();
+    if (set.Count == 0) yield break;
+    var hits = new List<RuneforgeIndexHit>();
+    for (var offset = 0; offset + 2 <= block.Body.Length; offset += 2)
+    {
+        var value = BitConverter.ToUInt16(block.Body, offset);
+        if (set.Contains(value))
+            hits.Add(new RuneforgeIndexHit(offset, value));
+    }
+
+    foreach (var group in hits.GroupBy(h => h.Offset & ~0x3F))
+    {
+        var matched = group.Select(h => h.Index).Distinct().OrderBy(i => i).ToArray();
+        if (matched.Length == 0) continue;
+        yield return new RuneforgeFingerprintCandidate(
+            "ushort-window",
+            block,
+            group.Key,
+            matched,
+            group.Take(12).Select(h => $"+0x{h.Offset:X3}=u16:{h.Index}").ToArray(),
+            ScoreFingerprint(block, "ushort-window", matched.Length));
+    }
+}
+
+static IEnumerable<RuneforgeFingerprintCandidate> FindPackedByteFingerprintCandidates(
+    RuneforgeFingerprintBlock block,
+    IReadOnlyList<int> indexes)
+{
+    var set = indexes.Where(i => i is > 1 and <= byte.MaxValue).ToHashSet();
+    if (set.Count == 0) yield break;
+    var hits = new List<RuneforgeIndexHit>();
+    for (var offset = 0; offset < block.Body.Length; offset++)
+    {
+        var value = block.Body[offset];
+        if (set.Contains(value))
+            hits.Add(new RuneforgeIndexHit(offset, value));
+    }
+
+    foreach (var group in hits.GroupBy(h => h.Offset & ~0x3F))
+    {
+        var matched = group.Select(h => h.Index).Distinct().OrderBy(i => i).ToArray();
+        if (matched.Length == 0) continue;
+        yield return new RuneforgeFingerprintCandidate(
+            "byte-window",
+            block,
+            group.Key,
+            matched,
+            group.Take(12).Select(h => $"+0x{h.Offset:X3}=u8:{h.Index}").ToArray(),
+            ScoreFingerprint(block, "byte-window", matched.Length) - 8);
+    }
+}
+
+static IEnumerable<RuneforgeFingerprintCandidate> FindBitsetFingerprintCandidates(
+    RuneforgeFingerprintBlock block,
+    IReadOnlyList<int> indexes)
+{
+    var useful = indexes.Where(i => i is > 1 and < 2048).Distinct().OrderBy(i => i).ToArray();
+    if (useful.Length == 0) yield break;
+    var maxWord = useful.Max() / 32;
+    var bytesRequired = (maxWord + 1) * 4;
+    if (block.Body.Length < bytesRequired) yield break;
+
+    var minHits = Math.Min(2, useful.Length);
+    for (var baseOffset = 0; baseOffset + bytesRequired <= block.Body.Length; baseOffset += 4)
+    {
+        var matched = new List<int>();
+        foreach (var index in useful)
+        {
+            var wordOffset = baseOffset + (index / 32) * 4;
+            var word = BitConverter.ToUInt32(block.Body, wordOffset);
+            var mask = 1u << (index & 31);
+            if ((word & mask) != 0)
+                matched.Add(index);
+        }
+
+        if (matched.Count < minHits) continue;
+
+        var selectedWords = useful.Select(i => i / 32).Distinct().ToArray();
+        var setBits = 0;
+        foreach (var wordIndex in selectedWords)
+        {
+            var word = BitConverter.ToUInt32(block.Body, baseOffset + wordIndex * 4);
+            setBits += System.Numerics.BitOperations.PopCount(word);
+        }
+
+        if (setBits > Math.Max(16, matched.Count * 8)) continue;
+        yield return new RuneforgeFingerprintCandidate(
+            "bitset32",
+            block,
+            baseOffset,
+            matched.OrderBy(i => i).ToArray(),
+            selectedWords
+                .Take(8)
+                .Select(w => $"+0x{baseOffset + w * 4:X3}=0x{BitConverter.ToUInt32(block.Body, baseOffset + w * 4):X8}")
+                .ToArray(),
+            ScoreFingerprint(block, "bitset32", matched.Count) + 6);
+    }
+}
+
+static int ScoreFingerprint(RuneforgeFingerprintBlock block, string kind, int matchedCount)
+{
+    var score = matchedCount * 20;
+    if (block.Path == "component") score += 15;
+    if (block.ComponentName.Contains("Interaction", StringComparison.OrdinalIgnoreCase)) score += 10;
+    if (block.ComponentName.Contains("Stats", StringComparison.OrdinalIgnoreCase)) score += 4;
+    if (kind.StartsWith("bitset", StringComparison.Ordinal)) score += 4;
+    if (matchedCount == 1) score -= 16;
+    if (block.Path.Length > 160) score -= 6;
+    return score;
+}
+
+static void PrintFingerprintCandidate(
+    RuneforgeFingerprintCandidate candidate,
+    IReadOnlyDictionary<int, string> anchorByIndex)
+{
+    var names = candidate.MatchedIndexes
+        .Take(8)
+        .Select(i => anchorByIndex.TryGetValue(i, out var text) ? $"{i}:{text}" : i.ToString())
+        .ToArray();
+    Console.WriteLine(
+        $"  score={candidate.Score,3} kind={candidate.Kind,-13} matched={candidate.MatchedIndexes.Count,2} " +
+        $"{candidate.Block.Source,-8} id={candidate.Block.EntityId,-8} {candidate.Block.ComponentName,-18} " +
+        $"idx={candidate.Block.ComponentIndex,2} off=+0x{candidate.Offset:X3}");
+    Console.WriteLine($"    path={candidate.Block.Path}");
+    Console.WriteLine($"    rows=[{string.Join(" | ", names)}]");
+    Console.WriteLine($"    hits=[{string.Join(", ", candidate.Hits)}]");
+}
+
+static IEnumerable<(string Source, uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float? Distance)> EnumerateRuneforgeSourceEntities(
+    MemoryReader reader,
+    nint areaInstance,
+    System.Numerics.Vector2? playerGrid)
+{
+    foreach (var (source, mapOffset) in new[] { ("sleeping", Poe2.AreaInstance.SleepingEntities), ("awake", Poe2.AreaInstance.AwakeEntities) })
+    {
+        foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+        {
+            if (!metadata.Contains("Expedition2", StringComparison.OrdinalIgnoreCase) &&
+                !metadata.Contains("LeagueExpeditionNew", StringComparison.OrdinalIgnoreCase) &&
+                !metadata.Contains("RuneEncounter", StringComparison.OrdinalIgnoreCase) &&
+                !metadata.Contains("Runeforge", StringComparison.OrdinalIgnoreCase) &&
+                !metadata.Contains("Runeshape", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var grid = ReadEntityGrid(reader, entity);
+            var distance = playerGrid.HasValue && grid.HasValue
+                ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+                : (float?)null;
+            yield return (source, id, entity, metadata, grid, distance);
+        }
+    }
+}
+
+static RuneforgePopulateState CaptureRuneforgePopulateState(MemoryReader reader, nint catalog, int maxChildren)
+{
+    var flags = ReadUiFlags(reader, catalog);
+    var childFirst = SafePtr(reader, catalog + Poe2.UiElement.Children);
+    reader.TryReadStruct<nint>(catalog + Poe2.UiElement.ChildrenEnd, out var childLast);
+    reader.TryReadStruct<nint>(catalog + Poe2.UiElement.ChildrenEnd + 8, out var childCapacity);
+    reader.TryReadStruct<uint>(catalog + 0x2E8, out var field2E8);
+    reader.TryReadStruct<uint>(catalog + 0x2F0, out var field2F0);
+    reader.TryReadStruct<nint>(catalog + 0x48, out var mirrorFirst);
+    reader.TryReadStruct<nint>(catalog + 0x50, out var mirrorLast);
+    reader.TryReadStruct<nint>(catalog + 0x58, out var mirrorCapacity);
+    reader.TryReadStruct<nint>(catalog + 0x318, out var tabsFirst);
+    reader.TryReadStruct<nint>(catalog + 0x320, out var tabsLast);
+    reader.TryReadStruct<nint>(catalog + 0x328, out var tabsCapacity);
+
+    var childCount = CountPointerVector(childFirst, childLast, maxChildren * 8L);
+    if (childCount < 0) childCount = 0;
+    var capacity = CountPointerVector(childFirst, childCapacity, maxChildren * 16L);
+    if (capacity < 0) capacity = 0;
+    var mirrorCount = CountPointerVector(mirrorFirst, mirrorLast, maxChildren * 8L);
+    if (mirrorCount < 0) mirrorCount = 0;
+    var tabsCount = CountPointerVector(tabsFirst, tabsLast, 128 * 8L);
+    if (tabsCount < 0) tabsCount = 0;
+
+    var visibleRows = 0;
+    if (TryReadUiChildrenVector(reader, catalog, maxChildren, out var first, out var count))
+    {
+        for (long i = 0; i < count; i++)
+        {
+            var row = SafePtr(reader, first + (nint)(i * 8));
+            if (row == 0 || !ReadUiVisible(reader, row)) continue;
+            visibleRows++;
+        }
+    }
+
+    return new RuneforgePopulateState(flags, childLast, childCount, capacity, visibleRows, mirrorLast, mirrorCount, tabsCount, field2E8, field2F0);
+}
+
+static void PrintRuneforgePopulateState(long elapsedMs, RuneforgePopulateState state)
+{
+    Console.WriteLine(
+        $"  {elapsedMs,6}  {state.ChildCount,4} {state.Capacity,5} {state.VisibleRows,11}  " +
+        $"0x{state.ChildLast:X16}  {state.MirrorCount,10} 0x{state.MirrorLast:X16} {state.TabsCount,4} " +
+        $"{state.Field2E8,4} {state.Field2F0,4} 0x{state.Flags:X8}");
+}
+
+static void PrintRuneforgePopulateStateHeader()
+{
+    Console.WriteLine("  ms       rows  cap   visibleRows  vecLast              mirrorRows  mirrorLast           tabs +2E8 +2F0 flags");
+}
+
+static bool TryResolveRuneforgeCatalogSlot(
+    MemoryReader reader,
+    nint uiRoot,
+    int maxChildren,
+    int maxBranches,
+    out nint parent,
+    out nint catalog,
+    out nint bonus,
+    out IReadOnlyList<RuneforgeUiTraceNode> parentPath,
+    bool requireVisibleGate = false)
+{
+    parent = 0;
+    catalog = 0;
+    bonus = 0;
+    parentPath = TraceRuneforgeUiParentPath(reader, uiRoot, requireVisibleGate, maxChildren, maxBranches);
+    if (parentPath.Count < Poe2.Runeforge.PanelFlagFingerprints.Length - 1)
+        return false;
+
+    parent = parentPath[^1].Address;
+    catalog = GetUiChildAt(reader, parent, 0, maxChildren);
+    bonus = GetUiChildAt(reader, parent, 1, maxChildren);
+    return catalog != 0;
+}
+
+static IReadOnlyList<RuneforgeUiTraceNode> TraceRuneforgeUiParentPath(
+    MemoryReader reader,
+    nint uiRoot,
+    bool requireVisibleGate,
+    int maxChildren,
+    int maxBranches)
+{
+    var path = new List<RuneforgeUiTraceNode>();
+    var visitedBranches = 0;
+    Trace(uiRoot, 0);
+    return path;
+
+    bool Trace(nint parent, int step)
+    {
+        if (step == Poe2.Runeforge.PanelFlagFingerprints.Length - 1)
+            return true;
+
+        foreach (var candidate in EnumerateRuneforgeStepCandidates(reader, parent, step, requireVisibleGate, maxChildren))
+        {
+            if (++visitedBranches > maxBranches) return false;
+            path.Add(candidate);
+            if (Trace(candidate.Address, step + 1)) return true;
+            path.RemoveAt(path.Count - 1);
+        }
+        return false;
+    }
+}
+
+static RuneforgeUiChildSnapshot CaptureRuneforgeUiChildSnapshot(
+    MemoryReader reader,
+    string label,
+    nint element,
+    int maxChildren,
+    int fieldWindow)
+{
+    var body = new byte[fieldWindow];
+    var read = element == 0 ? 0 : reader.TryReadBytes(element, body);
+    if (read < body.Length)
+        Array.Resize(ref body, Math.Max(0, read));
+
+    var flags = element == 0 ? 0 : ReadUiFlags(reader, element);
+    var childFirst = element == 0 ? 0 : SafePtr(reader, element + Poe2.UiElement.Children);
+    reader.TryReadStruct<nint>(element + Poe2.UiElement.ChildrenEnd, out var childLast);
+    reader.TryReadStruct<nint>(element + Poe2.UiElement.ChildrenEnd + 8, out var childCapacity);
+    var childCount = CountPointerVector(childFirst, childLast, maxChildren * 8L);
+    var childCapacityCount = CountPointerVector(childFirst, childCapacity, maxChildren * 16L);
+
+    var rows = new List<string>();
+    if (TryReadUiChildrenVector(reader, element, maxChildren, out var first, out var count))
+    {
+        for (long i = 0; i < count; i++)
+        {
+            var row = SafePtr(reader, first + (nint)(i * 8));
+            if (row == 0 || !ReadUiVisible(reader, row)) continue;
+            var labelChild = GetUiChildAt(reader, row, 0, maxChildren);
+            var text = labelChild == 0 ? "" : ReadStdWString(reader, labelChild + Poe2.Runeforge.NameWString);
+            if (!string.IsNullOrWhiteSpace(text))
+                rows.Add($"{i}:{text}");
+        }
+    }
+
+    return new RuneforgeUiChildSnapshot(
+        label,
+        element,
+        flags,
+        (flags & (1u << Poe2.UiElement.FlagVisibleBit)) != 0,
+        childFirst,
+        childLast,
+        childCapacity,
+        childCount,
+        childCapacityCount,
+        body,
+        CaptureVectorFieldsFromBody(body, maxChildren),
+        rows);
+}
+
+static IReadOnlyList<RuneforgeVectorField> CaptureVectorFieldsFromBody(byte[] body, int maxChildren)
+{
+    var result = new List<RuneforgeVectorField>();
+    for (var offset = 0; offset + 24 <= body.Length; offset += 8)
+    {
+        var first = (nint)BitConverter.ToInt64(body, offset);
+        var last = (nint)BitConverter.ToInt64(body, offset + 8);
+        var end = (nint)BitConverter.ToInt64(body, offset + 16);
+        var count = CountPointerVector(first, last, maxChildren * 8L);
+        var capacity = CountPointerVector(first, end, maxChildren * 16L);
+        if (count <= 0 || capacity < count) continue;
+        if (!LooksLikeUserPointer(first) || !LooksLikeUserPointer(last) || !LooksLikeUserPointer(end)) continue;
+        result.Add(new RuneforgeVectorField(offset, first, last, end, count, capacity));
+    }
+    return result;
+}
+
+static void PrintRuneforgeUiChildSnapshot(RuneforgeUiChildSnapshot snapshot)
+{
+    Console.WriteLine(
+        $"{snapshot.Label,-7} catalog=0x{snapshot.Address:X16} flags=0x{snapshot.Flags:X8} visible={snapshot.Visible} " +
+        $"children={snapshot.ChildCount} capacity={snapshot.ChildCapacityCount} " +
+        $"vec=[0x{snapshot.ChildFirst:X16}..0x{snapshot.ChildLast:X16}..0x{snapshot.ChildCapacity:X16}]");
+    if (snapshot.VisibleRows.Count > 0)
+        foreach (var row in snapshot.VisibleRows.Take(12))
+            Console.WriteLine($"  visible row: {row}");
+    else
+        Console.WriteLine("  visible row: none");
+
+    foreach (var vector in snapshot.VectorFields.Take(12))
+        Console.WriteLine(
+            $"  vector +0x{vector.Offset:X3}: count={vector.Count} capacity={vector.Capacity} " +
+            $"0x{vector.First:X16}..0x{vector.Last:X16}..0x{vector.End:X16}");
+}
+
+static void PrintRuneforgeUiChildSnapshotDiff(RuneforgeUiChildSnapshot before, RuneforgeUiChildSnapshot after)
+{
+    Console.WriteLine("Catalog child[0] diff");
+    Console.WriteLine("---------------------");
+    Console.WriteLine($"address       : 0x{before.Address:X16} -> 0x{after.Address:X16}");
+    Console.WriteLine($"flags         : 0x{before.Flags:X8} -> 0x{after.Flags:X8}");
+    Console.WriteLine($"child count   : {before.ChildCount} -> {after.ChildCount}");
+    Console.WriteLine($"child vector  : 0x{before.ChildFirst:X16}/0x{before.ChildLast:X16}/0x{before.ChildCapacity:X16}");
+    Console.WriteLine($"             -> 0x{after.ChildFirst:X16}/0x{after.ChildLast:X16}/0x{after.ChildCapacity:X16}");
+
+    Console.WriteLine();
+    Console.WriteLine("Changed vector-like fields:");
+    var beforeVectors = before.VectorFields.ToDictionary(v => v.Offset);
+    var afterVectors = after.VectorFields.ToDictionary(v => v.Offset);
+    foreach (var offset in beforeVectors.Keys.Union(afterVectors.Keys).OrderBy(x => x).Take(80))
+    {
+        beforeVectors.TryGetValue(offset, out var b);
+        afterVectors.TryGetValue(offset, out var a);
+        if (b.Equals(a)) continue;
+        Console.WriteLine(
+            $"  +0x{offset:X3}: {FormatVectorField(b)} -> {FormatVectorField(a)}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Changed uint fields:");
+    var uintChanges = 0;
+    var min = Math.Min(before.Body.Length, after.Body.Length);
+    for (var offset = 0; offset + 4 <= min && uintChanges < 80; offset += 4)
+    {
+        var b = BitConverter.ToUInt32(before.Body, offset);
+        var a = BitConverter.ToUInt32(after.Body, offset);
+        if (b == a) continue;
+        Console.WriteLine($"  +0x{offset:X3}: 0x{b:X8} ({b}) -> 0x{a:X8} ({a})");
+        uintChanges++;
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Visible reward rows after populate:");
+    foreach (var row in after.VisibleRows.Take(32))
+        Console.WriteLine($"  {row}");
+}
+
+static string FormatVectorField(RuneforgeVectorField field)
+{
+    if (field.Offset == 0 && field.First == 0 && field.Last == 0 && field.End == 0)
+        return "<none>";
+    return $"count={field.Count} cap={field.Capacity} 0x{field.First:X16}/0x{field.Last:X16}/0x{field.End:X16}";
+}
+
+static long CountPointerVector(nint first, nint last, long maxBytes)
+{
+    var bytes = (long)last - (long)first;
+    if (first == 0 || last == 0 || bytes < 0 || bytes > maxBytes || bytes % 8 != 0)
+        return -1;
+    return bytes / 8;
+}
+
+static bool LooksLikeUserPointer(nint value)
+{
+    var u = (ulong)value;
+    return u >= 0x10000 && u <= 0x7FFFFFFFFFFF;
+}
+
+static nint OpenWriteHandle(int processId)
+{
+    const uint processVmWrite = 0x0020;
+    const uint processVmOperation = 0x0008;
+    const uint processQueryLimitedInformation = 0x1000;
+    return OpenProcess(processVmWrite | processVmOperation | processQueryLimitedInformation, false, (uint)processId);
+}
+
+static bool WriteUInt32(nint processHandle, nint address, uint value)
+{
+    var bytes = BitConverter.GetBytes(value);
+    if (!VirtualProtectEx(processHandle, address, (nuint)bytes.Length, 0x40, out var oldProtect))
+        return false;
+
+    var ok = WriteProcessMemory(processHandle, address, bytes, (nuint)bytes.Length, out var written) &&
+             written == (nuint)bytes.Length;
+    VirtualProtectEx(processHandle, address, (nuint)bytes.Length, oldProtect, out _);
+    return ok;
+}
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern nint OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool CloseHandle(nint hObject);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool VirtualProtectEx(nint hProcess, nint lpAddress, nuint dwSize, uint flNewProtect, out uint lpflOldProtect);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool WriteProcessMemory(nint hProcess, nint lpBaseAddress, byte[] lpBuffer, nuint nSize, out nuint lpNumberOfBytesWritten);
+
+static IReadOnlyList<RuneforgeUiTraceNode> TraceRuneforgeUiPath(
+    MemoryReader reader,
+    nint uiRoot,
+    bool requireVisibleGate,
+    int maxChildren,
+    int maxBranches)
+{
+    var path = new List<RuneforgeUiTraceNode>();
+    var visitedBranches = 0;
+    Trace(uiRoot, 0);
+    return path;
+
+    bool Trace(nint parent, int step)
+    {
+        if (step == Poe2.Runeforge.PanelFlagFingerprints.Length)
+            return IsRuneforgeRecipesContainer(reader, parent, maxChildren, out _);
+
+        foreach (var candidate in EnumerateRuneforgeStepCandidates(reader, parent, step, requireVisibleGate, maxChildren))
+        {
+            if (++visitedBranches > maxBranches) return false;
+            path.Add(candidate);
+            if (Trace(candidate.Address, step + 1)) return true;
+            path.RemoveAt(path.Count - 1);
+        }
+        return false;
+    }
+}
+
+static IReadOnlyList<IReadOnlyList<RuneforgeUiTraceNode>> EnumerateRuneforgeUiPaths(
+    MemoryReader reader,
+    nint uiRoot,
+    bool requireVisibleGate,
+    int maxChildren,
+    int maxPaths)
+{
+    var paths = new List<IReadOnlyList<RuneforgeUiTraceNode>>();
+    var current = new List<RuneforgeUiTraceNode>();
+    Walk(uiRoot, 0);
+    return paths;
+
+    void Walk(nint parent, int step)
+    {
+        if (paths.Count >= maxPaths) return;
+        if (step == Poe2.Runeforge.PanelFlagFingerprints.Length)
+        {
+            if (IsRuneforgeRecipesContainer(reader, parent, maxChildren, out _))
+                paths.Add(current.ToArray());
+            return;
+        }
+
+        foreach (var candidate in EnumerateRuneforgeStepCandidates(reader, parent, step, requireVisibleGate, maxChildren))
+        {
+            current.Add(candidate);
+            Walk(candidate.Address, step + 1);
+            current.RemoveAt(current.Count - 1);
+            if (paths.Count >= maxPaths) return;
+        }
+    }
+}
+
+static void PrintRuneforgeUiPathSet(
+    MemoryReader reader,
+    IReadOnlyList<IReadOnlyList<RuneforgeUiTraceNode>> paths,
+    int maxChildren)
+{
+    if (paths.Count == 0)
+    {
+        Console.WriteLine("  none");
+        return;
+    }
+
+    for (var i = 0; i < paths.Count; i++)
+    {
+        var path = paths[i];
+        if (path.Count == 0) continue;
+        var panel = path[^1].Address;
+        TrySummarizeRuneforgeRows(reader, panel, maxChildren, out var total, out var visible, out var firstVisible, out var firstAny);
+        Console.WriteLine(
+            $"  path[{i}] final=0x{panel:X16} rows={total} visibleRows={visible} " +
+            $"stepChildren=[{string.Join("/", path.Select(p => p.ChildIndex))}] " +
+            $"firstVisible='{firstVisible}' firstAny='{firstAny}'");
+        Console.WriteLine($"    finalFlags=0x{path[^1].Flags:X8} finalVisible={path[^1].Visible}");
+        PrintRuneforgeRecipeRows(reader, panel, Math.Min(total, 12));
+    }
+}
+
+static void PrintRuneforgeFinalParentChildren(
+    MemoryReader reader,
+    IReadOnlyList<IReadOnlyList<RuneforgeUiTraceNode>> paths,
+    int maxChildren)
+{
+    var path = paths.FirstOrDefault(p => p.Count >= 5);
+    if (path is null || path.Count < 5)
+    {
+        Console.WriteLine("  no full path available");
+        return;
+    }
+
+    var parent = path[^2].Address;
+    var finalTarget = Poe2.Runeforge.PanelFlagFingerprints[^1] & ~(1u << Poe2.UiElement.FlagVisibleBit);
+    Console.WriteLine($"  parent step {path[^2].Step} addr=0x{parent:X16} childCount={TryGetUiChildCount(reader, parent)} finalTargetNoVisible=0x{finalTarget:X8}");
+    if (!TryReadUiChildrenVector(reader, parent, maxChildren, out var first, out var count))
+    {
+        Console.WriteLine("  could not read final parent children");
+        return;
+    }
+
+    for (long i = 0; i < count && i < 16; i++)
+    {
+        var child = SafePtr(reader, first + (nint)(i * 8));
+        if (child == 0)
+        {
+            Console.WriteLine($"    child[{i}] null");
+            continue;
+        }
+
+        var flags = ReadUiFlags(reader, child);
+        var matchesFinal = (flags & ~(1u << Poe2.UiElement.FlagVisibleBit)) == finalTarget;
+        IsRuneforgeRecipesContainer(reader, child, maxChildren, out var rowCount);
+        TrySummarizeRuneforgeRows(reader, child, maxChildren, out var total, out var visible, out var firstVisible, out var firstAny);
+        Console.WriteLine(
+            $"    child[{i}] addr=0x{child:X16} flags=0x{flags:X8} visible={ReadUiVisible(reader, child)} " +
+            $"matchFinal={matchesFinal} children={TryGetUiChildCount(reader, child)} rows={total} visibleRows={visible} " +
+            $"recipeRows={rowCount} firstVisible='{firstVisible}' firstAny='{firstAny}'");
+        if (total > 0)
+            PrintRuneforgeRecipeRows(reader, child, 8);
+    }
+}
+
+static void TrySummarizeRuneforgeRows(
+    MemoryReader reader,
+    nint panel,
+    int maxChildren,
+    out int total,
+    out int visible,
+    out string firstVisible,
+    out string firstAny)
+{
+    total = 0;
+    visible = 0;
+    firstVisible = "";
+    firstAny = "";
+    if (!TryReadUiChildrenVector(reader, panel, maxChildren, out var first, out var count)) return;
+
+    total = (int)count;
+    for (long i = 0; i < count; i++)
+    {
+        var row = SafePtr(reader, first + (nint)(i * 8));
+        if (row == 0) continue;
+        var label = GetUiChildAt(reader, row, 0, maxChildren);
+        var text = label == 0 ? "" : ReadStdWString(reader, label + Poe2.Runeforge.NameWString);
+        if (string.IsNullOrWhiteSpace(text)) continue;
+        firstAny = firstAny.Length == 0 ? text : firstAny;
+        if (!ReadUiVisible(reader, row)) continue;
+        visible++;
+        firstVisible = firstVisible.Length == 0 ? text : firstVisible;
+    }
+}
+
+static IEnumerable<RuneforgeUiTraceNode> EnumerateRuneforgeStepCandidates(
+    MemoryReader reader,
+    nint parent,
+    int step,
+    bool requireVisibleGate,
+    int maxChildren)
+{
+    if (!TryReadUiChildrenVector(reader, parent, maxChildren, out var first, out var count))
+        yield break;
+
+    var visibleMask = 1u << Poe2.UiElement.FlagVisibleBit;
+    var target = Poe2.Runeforge.PanelFlagFingerprints[step] & ~visibleMask;
+    for (var pass = 0; pass < 2; pass++)
+    {
+        var wantVisible = pass == 0;
+        for (long i = 0; i < count; i++)
+        {
+            var child = SafePtr(reader, first + (nint)(i * 8));
+            if (child == 0 ||
+                !reader.TryReadStruct<uint>(child + Poe2.UiElement.Flags, out var flags) ||
+                (flags & ~visibleMask) != target)
+                continue;
+
+            var visible = (flags & visibleMask) != 0;
+            if (visible != wantVisible) continue;
+            if (requireVisibleGate && step == Poe2.Runeforge.GateStep && !visible) continue;
+            IsRuneforgeRecipesContainer(reader, child, maxChildren, out var rowCount);
+            yield return new RuneforgeUiTraceNode(
+                step,
+                (int)i,
+                child,
+                flags,
+                visible,
+                TryGetUiChildCount(reader, child),
+                rowCount);
+        }
+    }
+}
+
+static void PrintRuneforgeUiTrace(MemoryReader reader, IReadOnlyList<RuneforgeUiTraceNode> path)
+{
+    if (path.Count == 0)
+    {
+        Console.WriteLine("  no complete path to recipes container");
+        return;
+    }
+
+    for (var i = 0; i < path.Count; i++)
+    {
+        var node = path[i];
+        var visibleBit = 1u << Poe2.UiElement.FlagVisibleBit;
+        Console.WriteLine(
+            $"  step {node.Step} child[{node.ChildIndex}] addr=0x{node.Address:X16} " +
+            $"flags=0x{node.Flags:X8} visible={node.Visible} childCount={node.ChildCount} " +
+            $"recipesRows={node.RecipeRowCount}");
+        Console.WriteLine(
+            $"       candidate write field: 0x{node.Address + Poe2.UiElement.Flags:X16} " +
+            $"current=0x{node.Flags:X8} visibleOn=0x{node.Flags | visibleBit:X8} visibleOff=0x{node.Flags & ~visibleBit:X8}");
+    }
+
+    var panel = path[^1].Address;
+    if (IsRuneforgeRecipesContainer(reader, panel, 4000, out var rows))
+    {
+        Console.WriteLine($"  final recipes container: 0x{panel:X16}, rows={rows}");
+        PrintRuneforgeRecipeRows(reader, panel, Math.Min(rows, 20));
+    }
+}
+
+static bool IsRuneforgeRecipesContainer(MemoryReader reader, nint element, int maxChildren, out int rowCount)
+{
+    rowCount = 0;
+    if (!TryReadUiChildrenVector(reader, element, maxChildren, out var first, out var count))
+        return false;
+
+    var namedRows = 0;
+    for (long i = 0; i < count; i++)
+    {
+        var row = SafePtr(reader, first + (nint)(i * 8));
+        if (row == 0) continue;
+        var label = GetUiChildAt(reader, row, 0, maxChildren);
+        if (label == 0) continue;
+        var text = ReadStdWString(reader, label + Poe2.Runeforge.NameWString);
+        if (LooksLikeRuneforgeRewardText(text))
+            namedRows++;
+    }
+
+    rowCount = (int)count;
+    return namedRows > 0;
+}
+
+static void PrintRuneforgeRecipeRows(MemoryReader reader, nint panel, int limit)
+{
+    if (!TryReadUiChildrenVector(reader, panel, 4000, out var first, out var count)) return;
+    var rows = new List<(long Index, nint Row, uint Flags, bool Visible, string Text)>();
+    for (long i = 0; i < count; i++)
+    {
+        var row = SafePtr(reader, first + (nint)(i * 8));
+        if (row == 0) continue;
+        var flags = ReadUiFlags(reader, row);
+        var label = GetUiChildAt(reader, row, 0, 4000);
+        var text = label == 0 ? "" : ReadStdWString(reader, label + Poe2.Runeforge.NameWString);
+        if (string.IsNullOrWhiteSpace(text)) continue;
+        rows.Add((i, row, flags, ReadUiVisible(reader, row), text));
+    }
+
+    foreach (var row in rows
+                 .OrderByDescending(r => r.Visible)
+                 .ThenBy(r => r.Index)
+                 .Take(limit))
+        Console.WriteLine($"    row[{row.Index}] row=0x{row.Row:X16} flags=0x{row.Flags:X8} visible={row.Visible} text='{row.Text}'");
+}
+
+static bool TryReadUiChildrenVector(MemoryReader reader, nint element, int maxChildren, out nint first, out long count)
+{
+    first = SafePtr(reader, element + Poe2.UiElement.Children);
+    count = 0;
+    if (first == 0 ||
+        !reader.TryReadStruct<nint>(element + Poe2.UiElement.ChildrenEnd, out var last))
+        return false;
+    count = ((long)last - (long)first) / 8;
+    return count is > 0 && count <= maxChildren;
+}
+
+static nint GetUiChildAt(MemoryReader reader, nint element, int index, int maxChildren)
+{
+    return TryReadUiChildrenVector(reader, element, maxChildren, out var first, out var count) &&
+           index >= 0 &&
+           index < count
+        ? SafePtr(reader, first + (nint)(index * 8))
+        : 0;
+}
+
+static (string Source, uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float? Distance)
+    FindNearestRuneforgeEncounter(MemoryReader reader, nint areaInstance, nint localPlayer)
+{
+    var playerGrid = localPlayer == 0 ? null : ReadEntityGrid(reader, localPlayer);
+    var matches = new List<(string Source, uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float? Distance)>();
+    foreach (var (source, mapOffset) in new[] { ("sleeping", Poe2.AreaInstance.SleepingEntities), ("awake", Poe2.AreaInstance.AwakeEntities) })
+    {
+        foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+        {
+            if (!metadata.Contains("Expedition2Encounter", StringComparison.OrdinalIgnoreCase)) continue;
+            var grid = ReadEntityGrid(reader, entity);
+            var distance = playerGrid.HasValue && grid.HasValue
+                ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+                : (float?)null;
+            matches.Add((source, id, entity, metadata, grid, distance));
+        }
+    }
+
+    return matches
+        .OrderBy(m => m.Distance ?? float.MaxValue)
+        .FirstOrDefault();
+}
+
+static RuneforgeEncounterSnapshot CaptureRuneforgeEncounterSnapshot(MemoryReader reader, nint entity)
+{
+    var stateMachine = ResolveComponentAddr(reader, entity, "StateMachine");
+    var stats = ResolveComponentAddr(reader, entity, "Stats");
+    var preload = ResolveComponentAddr(reader, entity, "Preload");
+    return new RuneforgeEncounterSnapshot(
+        CaptureStateValues(reader, stateMachine),
+        CaptureStatsVectors(reader, stats),
+        CapturePreloadTexts(reader, preload, 0x280, 0x420));
+}
+
+static IReadOnlyList<long> CaptureStateValues(MemoryReader reader, nint stateMachine)
+{
+    if (stateMachine == 0 ||
+        !reader.TryReadStruct<StdVector>(stateMachine + 0x160, out var values) ||
+        !TryGetVectorCount(values, sizeof(long), 1, 100, out var count))
+        return [];
+
+    var result = new List<long>();
+    for (var i = 0; i < Math.Min(count, 16); i++)
+        if (reader.TryReadStruct<long>(values.First + i * sizeof(long), out var value))
+            result.Add(value);
+    return result;
+}
+
+static IReadOnlyDictionary<int, IReadOnlyList<nint>> CaptureStatsVectors(MemoryReader reader, nint stats)
+{
+    var result = new Dictionary<int, IReadOnlyList<nint>>();
+    if (stats == 0) return result;
+    for (var offset = 0; offset <= 0x1000 - 0x18; offset += 8)
+    {
+        if (!reader.TryReadStruct<StdVector>(stats + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x20000, out var bytes) ||
+            bytes % 8 != 0)
+            continue;
+
+        var count = bytes / 8;
+        if (count is <= 0 or > 8192) continue;
+        var items = new List<nint>();
+        for (var i = 0; i < Math.Min(count, 64); i++)
+        {
+            if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var value)) break;
+            items.Add(value);
+        }
+        result[offset] = items;
+    }
+    return result;
+}
+
+static IReadOnlyDictionary<int, string> CapturePreloadTexts(MemoryReader reader, nint preload, int startOffset, int endOffset)
+{
+    var result = new Dictionary<int, string>();
+    if (preload == 0) return result;
+    for (var offset = startOffset; offset <= endOffset - 8; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, preload, offset))
+        {
+            if (!LooksLikeProbeText(clue.Text)) continue;
+            result[offset] = clue.Text;
+            break;
+        }
+    }
+    return result;
+}
+
+static void PrintRuneforgeSnapshotSummary(string label, RuneforgeEncounterSnapshot snapshot)
+{
+    Console.WriteLine($"{label,-12}: state=[{string.Join(", ", snapshot.StateValues)}] vectors={snapshot.StatsVectors.Count} preloadTexts={snapshot.PreloadTexts.Count}");
+}
+
+static void PrintRuneforgeSnapshotDelta(
+    MemoryReader reader,
+    RuneforgeEncounterSnapshot before,
+    RuneforgeEncounterSnapshot after,
+    int objectWindow)
+{
+    Console.WriteLine();
+    Console.WriteLine("Delta");
+    Console.WriteLine("-----");
+    if (!before.StateValues.SequenceEqual(after.StateValues))
+        Console.WriteLine($"State values  : [{string.Join(", ", before.StateValues)}] -> [{string.Join(", ", after.StateValues)}]");
+    else
+        Console.WriteLine($"State values  : unchanged [{string.Join(", ", after.StateValues)}]");
+
+    foreach (var offset in before.StatsVectors.Keys.Concat(after.StatsVectors.Keys).Distinct().OrderBy(x => x))
+    {
+        before.StatsVectors.TryGetValue(offset, out var b);
+        after.StatsVectors.TryGetValue(offset, out var a);
+        b ??= [];
+        a ??= [];
+        if (b.SequenceEqual(a)) continue;
+
+        Console.WriteLine($"Stats+0x{offset:X3}: count {b.Count} -> {a.Count}");
+        var changed = new List<(int Index, nint Before, nint After)>();
+        var max = Math.Max(b.Count, a.Count);
+        for (var i = 0; i < max && changed.Count < 12; i++)
+        {
+            var bv = i < b.Count ? b[i] : 0;
+            var av = i < a.Count ? a[i] : 0;
+            if (bv != av) changed.Add((i, bv, av));
+        }
+
+        foreach (var item in changed)
+        {
+            Console.WriteLine($"  [{item.Index,2}] 0x{item.Before:X16} -> 0x{item.After:X16}");
+            if (IsPlausiblePointer(item.After))
+                PrintPointedObjectSummary(reader, item.After, "       ", objectWindow);
+        }
+    }
+
+    foreach (var offset in before.PreloadTexts.Keys.Concat(after.PreloadTexts.Keys).Distinct().OrderBy(x => x))
+    {
+        before.PreloadTexts.TryGetValue(offset, out var b);
+        after.PreloadTexts.TryGetValue(offset, out var a);
+        if (StringComparer.Ordinal.Equals(b, a)) continue;
+        Console.WriteLine($"Preload+0x{offset:X3}: '{b ?? ""}' -> '{a ?? ""}'");
+    }
+}
+
+static void PrintAllObjectVectors(
+    MemoryReader reader,
+    nint component,
+    string componentName,
+    int scanWindow,
+    int entryLimit,
+    int objectWindow)
+{
+    var printed = 0;
+    Console.WriteLine($"    {componentName} broad vector scan 0x000..0x{scanWindow:X3}");
+    for (var offset = 0; offset <= scanWindow - 0x18 && printed < 24; offset += 8)
+    {
+        if (!reader.TryReadStruct<StdVector>(component + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x20000, out var bytes))
+            continue;
+
+        var count8 = bytes / 8;
+        if (!VectorHasInterestingEntry(reader, vector, count8))
+            continue;
+
+        Console.WriteLine($"      {componentName}+0x{offset:X3}: vector bytes=0x{bytes:X} count8={count8}");
+        for (var i = 0; i < count8 && i < entryLimit; i++)
+        {
+            if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var ptr))
+                break;
+            Console.WriteLine($"        [{i,2}] qword=0x{ptr:X16}");
+            if (IsPlausiblePointer(ptr))
+                PrintPointedObjectSummary(reader, ptr, "          ", objectWindow);
+        }
+        printed++;
+    }
+}
+
+static bool VectorHasInterestingEntry(MemoryReader reader, StdVector vector, int count8)
+{
+    for (var i = 0; i < Math.Min(count8, 12); i++)
+    {
+        if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var ptr)) continue;
+        if (!IsPlausiblePointer(ptr)) continue;
+        if (!string.IsNullOrWhiteSpace(ReadEntityMetadata(reader, ptr))) return true;
+        for (var offset = 0; offset <= 0x180; offset += 8)
+        {
+            foreach (var clue in ReadStringCluesAt(reader, ptr, offset))
+                if (LooksLikeRuneforgeRewardText(clue.Text) ||
+                    LooksLikeRuneforgeModText(clue.Text) ||
+                    LooksLikeProbeText(clue.Text))
+                    return true;
+        }
+    }
+    return false;
+}
+
+static void PrintSuspectObjectVectors(
+    MemoryReader reader,
+    nint component,
+    string componentName,
+    IReadOnlyList<int> offsets,
+    int entryLimit,
+    int objectWindow)
+{
+    foreach (var offset in offsets)
+    {
+        if (!reader.TryReadStruct<StdVector>(component + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x20000, out var bytes))
+        {
+            Console.WriteLine($"    {componentName}+0x{offset:X3}: no vector");
+            continue;
+        }
+
+        var count8 = bytes / 8;
+        Console.WriteLine($"    {componentName}+0x{offset:X3}: vector bytes=0x{bytes:X} count8={count8}");
+        for (var i = 0; i < count8 && i < entryLimit; i++)
+        {
+            if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var ptr))
+                break;
+            Console.WriteLine($"      [{i,2}] qword=0x{ptr:X16}");
+            if (IsPlausiblePointer(ptr))
+                PrintPointedObjectSummary(reader, ptr, "        ", objectWindow);
+        }
+    }
+}
+
+static void PrintPreloadRuneforgeWindow(
+    MemoryReader reader,
+    nint preload,
+    int startOffset,
+    int endOffset,
+    int entryLimit,
+    int objectWindow)
+{
+    var seenText = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    Console.WriteLine($"    Preload scan +0x{startOffset:X3}..+0x{endOffset:X3}");
+    for (var offset = startOffset; offset <= endOffset - 8; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, preload, offset))
+        {
+            if (!LooksLikeProbeText(clue.Text) || !seenText.Add(clue.Text)) continue;
+            Console.WriteLine($"      TEXT {clue.Kind,-12} +0x{offset:X3} -> {clue.Text}");
+        }
+
+        if (!reader.TryReadStruct<StdVector>(preload + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x20000, out var bytes))
+            continue;
+
+        var count8 = bytes / 8;
+        Console.WriteLine($"      VECTOR +0x{offset:X3} bytes=0x{bytes:X} count8={count8}");
+        for (var i = 0; i < count8 && i < entryLimit; i++)
+        {
+            if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var ptr))
+                break;
+            Console.WriteLine($"        [{i,2}] qword=0x{ptr:X16}");
+            if (IsPlausiblePointer(ptr))
+                PrintPointedObjectSummary(reader, ptr, "          ", objectWindow);
+        }
+    }
+}
+
+static void PrintPointedObjectSummary(MemoryReader reader, nint address, string indent, int objectWindow)
+{
+    var metadata = ReadEntityMetadata(reader, address);
+    if (!string.IsNullOrWhiteSpace(metadata))
+    {
+        var components = ReadComponentMap(reader, address);
+        Console.WriteLine($"{indent}entity-like metadata='{metadata}' comps=[{string.Join(",", components.Select(c => c.Name))}]");
+    }
+
+    PrintSmallIntSummary(reader, address, indent);
+    PrintObjectStringSummary(reader, address, indent, objectWindow);
+    PrintNestedVectorSummary(reader, address, indent, Math.Min(objectWindow, 0x500));
+}
+
+static void PrintSmallIntSummary(MemoryReader reader, nint address, string indent)
+{
+    var values = new List<string>();
+    for (var offset = 0; offset < 0x80; offset += 4)
+    {
+        if (!reader.TryReadStruct<int>(address + offset, out var value)) continue;
+        if (value == 0 || Math.Abs((long)value) > 250000) continue;
+        values.Add($"+0x{offset:X2}={value}");
+        if (values.Count >= 16) break;
+    }
+
+    if (values.Count > 0)
+        Console.WriteLine($"{indent}ints [{string.Join(", ", values)}]");
+}
+
+static void PrintObjectStringSummary(MemoryReader reader, nint address, string indent, int objectWindow)
+{
+    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var printed = 0;
+    for (var offset = 0; offset <= objectWindow - 8 && printed < 16; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, address, offset))
+        {
+            if (!LooksLikeProbeText(clue.Text) || !seen.Add(clue.Text)) continue;
+            Console.WriteLine($"{indent}text {clue.Kind,-12} +0x{offset:X3} -> {clue.Text}");
+            printed++;
+            if (printed >= 16) break;
+        }
+    }
+}
+
+static void PrintNestedVectorSummary(MemoryReader reader, nint address, string indent, int objectWindow)
+{
+    var printed = 0;
+    for (var offset = 0; offset <= objectWindow - 0x18 && printed < 8; offset += 8)
+    {
+        if (!reader.TryReadStruct<StdVector>(address + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x10000, out var bytes))
+            continue;
+
+        var count8 = bytes / 8;
+        var samples = new List<string>();
+        for (var i = 0; i < Math.Min(count8, 4); i++)
+        {
+            if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var value)) break;
+            samples.Add($"0x{value:X}");
+        }
+
+        Console.WriteLine($"{indent}nested-vector +0x{offset:X3} bytes=0x{bytes:X} count8={count8} sample=[{string.Join(", ", samples)}]");
+        printed++;
+    }
+}
+
+static string ItemNameFromMetadata(string metadata)
+{
+    if (string.IsNullOrWhiteSpace(metadata)) return "";
+    if (!metadata.StartsWith("Metadata/", StringComparison.OrdinalIgnoreCase)) return metadata.Trim();
+    var slash = metadata.LastIndexOf('/');
+    var leaf = slash >= 0 ? metadata[(slash + 1)..] : metadata;
+    return string.Join(' ', System.Text.RegularExpressions.Regex
+        .Replace(leaf, "([a-z])([A-Z])", "$1 $2")
+        .Split(['_', '-'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+}
+
+static void PrintComponentVectorClues(MemoryReader reader, nint component, int componentWindow)
+{
+    var printed = 0;
+    for (var offset = 0; offset <= componentWindow - 0x18 && printed < 10; offset += 8)
+    {
+        if (!reader.TryReadStruct<StdVector>(component + offset, out var vector) ||
+            !TryGetVectorByteSize(vector, 8, 0x8000, out var bytes))
+            continue;
+
+        var count8 = bytes / 8;
+        var samples = new List<string>();
+        for (var i = 0; i < Math.Min(count8, 4); i++)
+        {
+            if (!reader.TryReadStruct<nint>(vector.First + i * 8, out var value)) break;
+            samples.Add($"0x{value:X}");
+        }
+
+        Console.WriteLine(
+            $"    VECTOR candidate +0x{offset:X3} bytes=0x{bytes:X} count8={count8} sample=[{string.Join(", ", samples)}]");
+        printed++;
+    }
+}
+
+static void PrintComponentStringClues(MemoryReader reader, nint component, int componentWindow)
+{
+    var seen = new HashSet<string>(StringComparer.Ordinal);
+    var printed = 0;
+
+    for (var offset = 0; offset <= componentWindow - 8 && printed < 16; offset += 8)
+    {
+        foreach (var clue in ReadStringCluesAt(reader, component, offset))
+        {
+            if (!LooksLikeProbeText(clue.Text) || !seen.Add(clue.Text)) continue;
+            Console.WriteLine($"    TEXT {clue.Kind,-12} +0x{offset:X3} -> {clue.Text}");
+            printed++;
+            if (printed >= 16) break;
+        }
+    }
+}
+
+static IEnumerable<(string Kind, string Text)> ReadStringCluesAt(MemoryReader reader, nint component, int offset)
+{
+    var field = component + offset;
+
+    var directStdW = ReadStdWString(reader, field);
+    if (directStdW.Length > 0) yield return ("std::wstring", directStdW);
+
+    var ptr = SafePtr(reader, field);
+    if (ptr == 0) yield break;
+
+    var pointedStdW = ReadStdWString(reader, ptr);
+    if (pointedStdW.Length > 0) yield return ("ptr stdw", pointedStdW);
+
+    var nativeUtf8 = ReadNativeUtf8Text(reader, ptr);
+    if (nativeUtf8.Length > 0) yield return ("native utf8", nativeUtf8);
+
+    var utf8 = reader.ReadStringUtf8(ptr, 128);
+    if (utf8.Length > 0) yield return ("ptr utf8", utf8);
+
+    var utf16 = reader.ReadStringUtf16(ptr, 128);
+    if (utf16.Length > 0) yield return ("ptr utf16", utf16);
+}
+
+static bool LooksLikeProbeText(string value)
+{
+    if (value.Length is < 3 or > 160 || !value.Any(char.IsLetter)) return false;
+    var printable = 0;
+    foreach (var ch in value)
+    {
+        if (char.IsControl(ch) || ch == '\uFFFD') return false;
+        if (char.IsLetterOrDigit(ch) || char.IsWhiteSpace(ch) || ch is '_' or '-' or '/' or '\\' or ':' or '\'' or '(' or ')' or '[' or ']' or '.' or ',')
+            printable++;
+    }
+    return printable >= value.Length * 0.85;
+}
+
+static string FormatGrid(System.Numerics.Vector2? grid) =>
+    grid.HasValue ? $"({grid.Value.X:F1},{grid.Value.Y:F1})" : "-";
+
+static string FormatDistance(float? distance) =>
+    distance.HasValue ? distance.Value.ToString("F1") : "-";
 
 static IEnumerable<(uint Id, nint Address, string Metadata)> EnumerateEntityMap(
     MemoryReader reader,
@@ -2185,7 +7289,16 @@ static int? TryGetIntArg(string[] args, string flag)
 {
     var idx = Array.IndexOf(args, flag);
     if (idx < 0 || idx + 1 >= args.Length) return null;
-    return int.TryParse(args[idx + 1], out var v) ? v : null;
+    var s = args[idx + 1];
+    if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        return int.TryParse(s[2..], System.Globalization.NumberStyles.HexNumber, null, out var hex) ? hex : null;
+    return int.TryParse(s, out var v) ? v : null;
+}
+
+static string? TryGetStringArg(string[] args, string flag)
+{
+    var idx = Array.IndexOf(args, flag);
+    return idx < 0 || idx + 1 >= args.Length ? null : args[idx + 1];
 }
 
 static nint? TryGetHexArg(string[] args, string flag)
@@ -2209,6 +7322,138 @@ readonly record struct MechanicProbeEntity(
     string LifeState,
     int? HpCur,
     int? HpMax,
+    string StateValues);
+
+sealed record RuneforgeEncounterSnapshot(
+    IReadOnlyList<long> StateValues,
+    IReadOnlyDictionary<int, IReadOnlyList<nint>> StatsVectors,
+    IReadOnlyDictionary<int, string> PreloadTexts);
+
+readonly record struct RuneforgeUiTraceNode(
+    int Step,
+    int ChildIndex,
+    nint Address,
+    uint Flags,
+    bool Visible,
+    long ChildCount,
+    int RecipeRowCount);
+
+readonly record struct RuneforgeUiChildSnapshot(
+    string Label,
+    nint Address,
+    uint Flags,
+    bool Visible,
+    nint ChildFirst,
+    nint ChildLast,
+    nint ChildCapacity,
+    long ChildCount,
+    long ChildCapacityCount,
+    byte[] Body,
+    IReadOnlyList<RuneforgeVectorField> VectorFields,
+    IReadOnlyList<string> VisibleRows);
+
+readonly record struct RuneforgeVectorField(
+    int Offset,
+    nint First,
+    nint Last,
+    nint End,
+    long Count,
+    long Capacity);
+
+readonly record struct RuneforgePopulateState(
+    uint Flags,
+    nint ChildLast,
+    long ChildCount,
+    long Capacity,
+    int VisibleRows,
+    nint MirrorLast,
+    long MirrorCount,
+    long TabsCount,
+    uint Field2E8,
+    uint Field2F0);
+
+readonly record struct RuneforgeCatalogRow(
+    int Index,
+    nint Row,
+    uint Flags,
+    bool Visible,
+    string Text);
+
+readonly record struct RuneforgeInventoryBlockInfo(
+    uint Flags,
+    int CountField,
+    nint SmallFirst,
+    nint SmallLast,
+    nint SmallEnd,
+    int SmallCount,
+    int SmallCapacity,
+    nint LargeFirst,
+    nint LargeLast,
+    nint LargeEnd,
+    int LargeCount,
+    int LargeCapacity);
+
+readonly record struct RuneforgeInventoryBlockSnapshot(
+    string Source,
+    uint ControllerId,
+    nint Controller,
+    float? Distance,
+    int Block,
+    nint Inventories,
+    RuneforgeInventoryBlockInfo Info,
+    uint BlockHash,
+    IReadOnlyList<nint> SmallValues,
+    IReadOnlyList<byte[]> SmallTargetSamples,
+    IReadOnlyList<nint> LargeValues,
+    IReadOnlyList<byte[]> LargeTargetSamples);
+
+readonly record struct RuneforgeComponentMemorySnapshot(
+    string Source,
+    uint EntityId,
+    nint Entity,
+    string Metadata,
+    float? Distance,
+    string ComponentName,
+    int ComponentIndex,
+    nint Component,
+    byte[] Body);
+
+readonly record struct RuneforgeSelectionAnchor(
+    int Index,
+    string Text,
+    IReadOnlyList<string> Keys);
+
+readonly record struct RuneforgeIndexHit(
+    int Offset,
+    int Index);
+
+readonly record struct RuneforgeFingerprintBlock(
+    string Source,
+    uint EntityId,
+    string ComponentName,
+    int ComponentIndex,
+    nint Base,
+    string Path,
+    byte[] Body);
+
+readonly record struct RuneforgeFingerprintCandidate(
+    string Kind,
+    RuneforgeFingerprintBlock Block,
+    int Offset,
+    IReadOnlyList<int> MatchedIndexes,
+    IReadOnlyList<string> Hits,
+    int Score);
+
+readonly record struct EntrySnapshotRow(
+    string Source,
+    string Kind,
+    uint Id,
+    nint Address,
+    string Metadata,
+    System.Numerics.Vector2? Grid,
+    float? Distance,
+    string Components,
+    int? IconComplete,
     string StateValues);
 
 static class Win

@@ -180,8 +180,26 @@ public static class Poe2
     /// </summary>
     public static class StateMachine
     {
+        public const int ListenerVec = 0x20; // StdVector of listener-node ptrs; used by Runeshape monolith station lookup.
         public const int StatesPtr = 0x158;
         public const int StateValues = 0x160; // StdVector<long>
+    }
+
+    /// <summary>
+    /// RuneStation is the heap object behind a Runeshape monolith device. Sikaka v0.14.x uses the
+    /// StateMachine listener vector to reach it from an Expedition2Encounter entity and expose
+    /// hole count plus anchor rune without opening the Runeshape panel.
+    /// </summary>
+    public static class RuneStation
+    {
+        public const int Owner = 0x10;
+        public const int AnchorRef = 0x28;
+        public const int AnchorHolder = 0x30;
+        public const int HoleCount = 0x38;
+        public const int AnchorPos = 0x3C;
+        public const int ListenerSub = 0x98;
+        public const int RuneStride = 0x6C;
+        public const int RuneCount = 34;
     }
 
     /// <summary>ObjectMagicProperties component - monster/chest rarity.</summary>
@@ -203,6 +221,12 @@ public static class Poe2
     public static class RenderItemComponent
     {
         public const int ResourcePath = 0x28;
+    }
+
+    public static class BaseComponent
+    {
+        public const int NameRow = 0x10;
+        public const int RowDisplayName = 0x30;
     }
 
     public static class ModsComponent
@@ -461,6 +485,11 @@ public static class Poe2
         public const int NameWString = 0x390;
     }
 
+    public static class Ritual
+    {
+        public const int TileSlotItem = 0x4F8;
+    }
+
     /// <summary>Atlas/World Map UI fields discovered live by POE2Radar.Research --atlas-probe.</summary>
     public static class AtlasUi
     {
@@ -497,5 +526,12 @@ public static class Poe2
         public const int EdgeSourceOff = 0x04;
         public const int EdgeTargetOff = 0x0C;
         public const int CurrentMarkerNodePtr = 0x300;
+    }
+
+    public static class HoverTracker
+    {
+        public const int FromUiRoot = 0x7D8;
+        public const int WorldTracker = 0x630;
+        public const int HoveredEntity = 0x18;
     }
 }

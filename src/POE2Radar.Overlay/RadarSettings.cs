@@ -90,6 +90,8 @@ public sealed class RadarSettings
     public bool AtlasShowLabels { get; set; } = false;
     public bool AtlasDrawAll { get; set; } = false;
     public bool AtlasShowWaypointArrows { get; set; } = true;
+    public bool AtlasHideVisitedMaps { get; set; } = false;
+    public bool AtlasHideCompletedMaps { get; set; } = false;
     public List<string> AtlasHighlightTags { get; set; } = new();
     public List<string> AtlasArrowTags { get; set; } = new();
     public Dictionary<string, string> AtlasHighlightColors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -177,6 +179,7 @@ public sealed class RadarSettings
     public int FlaskManaKey { get; set; } = 0x32;
     public int FlaskLifeCooldownMs { get; set; } = 2500;
     public int FlaskManaCooldownMs { get; set; } = 2000;
+    public bool AutoFlaskEnabled { get; set; } = true;
 
     // Hotkey bindings (Windows VK codes)
     public int KeyCheat1 { get; set; } = 0x70;           // F1
@@ -286,6 +289,9 @@ public sealed class RadarSettings
 
     // Live trade pricing and world-item labels
     public GroundItemSettings GroundItems { get; set; } = new();
+
+    // Runeshape-monolith reward overlay
+    public MonolithSettings Monoliths { get; set; } = new();
 
     // Map drawing
     public bool MapCenterOnPlayerScreen { get; set; } = true;
@@ -424,6 +430,18 @@ public sealed class GroundItemSettings
     public int MinQuantity { get; set; } = 2;
     public string League { get; set; } = "";
     public List<string> Categories { get; set; } = ["Uniques", "Runes", "Essences", "Currency"];
+}
+
+public sealed class MonolithSettings
+{
+    public bool Enabled { get; set; } = true;
+    public double HighlightMinEx { get; set; } = 30.0;
+    public double MinRewardEx { get; set; } = 1.0;
+    public double MinValueEx { get; set; } = 0.0;
+    public bool HideCollected { get; set; } = true;
+    public bool ShowPanel { get; set; } = true;
+    public bool ShowMapLabel { get; set; } = true;
+    public float PanelMaxDistance { get; set; } = 0f;
 }
 
 public sealed class RadarStyles

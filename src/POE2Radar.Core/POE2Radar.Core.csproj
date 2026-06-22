@@ -18,6 +18,7 @@
     <EmbeddedResource Include="Game\zone_notes.json" />
     <EmbeddedResource Include="Game\poe2_mod_stats.json" />
     <EmbeddedResource Include="Game\poe2_stat_descriptions.json" />
+    <EmbeddedResource Include="Game\expedition2_recipes.json" />
   </ItemGroup>
 
 </Project>

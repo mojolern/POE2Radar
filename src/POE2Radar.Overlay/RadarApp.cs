@@ -48,6 +48,7 @@ public sealed class RadarApp : IDisposable
     private readonly DisplayRules _displayRules;
     private readonly ModCatalog _modCatalog;
     private readonly PriceBook _priceBook;
+    private readonly RuneMonolithCatalog _monoCatalog = RuneMonolithCatalog.Instance;
     private SettingsForm? _settingsForm;
     private volatile RadarState _state = RadarState.Empty;
     private volatile WorldFrame _worldFrame = WorldFrame.Empty;
@@ -121,6 +122,8 @@ public sealed class RadarApp : IDisposable
     private List<AtlasMark> _atlasMarks = new();
     private IReadOnlyList<ItemLabel> _itemLabels = Array.Empty<ItemLabel>();
     private IReadOnlyList<RuneLabel> _runeLabels = Array.Empty<RuneLabel>();
+    private IReadOnlyList<RitualLabel> _ritualLabels = Array.Empty<RitualLabel>();
+    private IReadOnlyList<MonolithMarker> _monoliths = Array.Empty<MonolithMarker>();
 
     private sealed record WorldFrame(
         bool InGame,
@@ -139,6 +142,8 @@ public sealed class RadarApp : IDisposable
         string? PathTargetName,
         IReadOnlyList<ItemLabel> ItemLabels,
         IReadOnlyList<RuneLabel> RuneLabels,
+        IReadOnlyList<RitualLabel> RitualRewards,
+        IReadOnlyList<MonolithMarker> Monoliths,
         IReadOnlyList<Poe2Atlas.AtlasNodeLive> AtlasNodes,
         IReadOnlyList<AtlasMark> AtlasMarks,
         NumVec2? AtlasRouteStart,
@@ -153,6 +158,7 @@ public sealed class RadarApp : IDisposable
             Array.Empty<Poe2Live.Landmark>(),
             null, "", null, 0, false, false, 0, null, null,
             Array.Empty<ItemLabel>(), Array.Empty<RuneLabel>(),
+            Array.Empty<RitualLabel>(), Array.Empty<MonolithMarker>(),
             Array.Empty<Poe2Atlas.AtlasNodeLive>(), Array.Empty<AtlasMark>(),
             null, null, Array.Empty<NumVec2>(), null, 0);
     }
@@ -191,6 +197,7 @@ public sealed class RadarApp : IDisposable
         _renderer = new OverlayRenderer(_window);
         var configDir = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? ".", "config");
         _radarSettings = RadarSettings.Load(Path.Combine(configDir, "radar_settings.json"));
+        _autoFlask = _radarSettings.AutoFlaskEnabled;
         if (_radarSettings.FpsCap > MaxSoftwareRenderHz)
         {
             Console.WriteLine(
@@ -364,6 +371,8 @@ public sealed class RadarApp : IDisposable
         _priceBook.RefreshIfDue();
         _itemLabels = BuildItemLabels(_entities);
         _runeLabels = BuildRuneLabels(inGameState);
+        _ritualLabels = BuildRitualLabels(inGameState);
+        _monoliths = BuildMonolithMarkers(areaLevel);
         UpdatePath(player);
 
         _worldFrame = new WorldFrame(
@@ -383,6 +392,8 @@ public sealed class RadarApp : IDisposable
             _pathTargetName,
             _itemLabels,
             _runeLabels,
+            _ritualLabels,
+            _monoliths,
             _atlasNodes,
             _atlasMarks,
             atlasRouteStart,
@@ -435,6 +446,8 @@ public sealed class RadarApp : IDisposable
         var pathPoints = worldFresh ? snap.PathPoints : null;
         var itemLabels = worldFresh ? snap.ItemLabels : Array.Empty<ItemLabel>();
         var runeLabels = worldFresh ? snap.RuneLabels : Array.Empty<RuneLabel>();
+        var ritualLabels = worldFresh ? snap.RitualRewards : Array.Empty<RitualLabel>();
+        var monoliths = worldFresh ? snap.Monoliths : Array.Empty<MonolithMarker>();
         var atlasNodes = worldFresh ? snap.AtlasNodes : Array.Empty<Poe2Atlas.AtlasNodeLive>();
         var atlasMarks = worldFresh ? snap.AtlasMarks : Array.Empty<AtlasMark>();
         var atlasRouteStart = worldFresh ? snap.AtlasRouteStart : null;
@@ -446,7 +459,8 @@ public sealed class RadarApp : IDisposable
             _hpPct, _manaPct, _autoFlask, _flaskNote, snap.AreaCode, _charName, snap.CharLevel,
             snap.AreaName, snap.AreaAct, snap.IsTown, snap.HasWaypoint,
             map.ShiftX, map.ShiftY,
-            minimap.Available, minimap.ShiftX, minimap.ShiftY, minimap.Zoom);
+            minimap.Available, minimap.ShiftX, minimap.ShiftY, minimap.Zoom,
+            monoliths);
 
         var ctx = new RenderContext(
             InGame: inGame,
@@ -492,6 +506,9 @@ public sealed class RadarApp : IDisposable
             PlayerWorld: playerWorld,
             ItemLabels: itemLabels,
             RuneLabels: runeLabels,
+            RitualRewards: ritualLabels,
+            Monoliths: monoliths,
+            ShowMonolithPanel: _radarSettings.Monoliths.ShowPanel,
             AtlasNodes: atlasNodes,
             AtlasMarks: atlasMarks,
             AtlasRouteStart: atlasRouteStart,
@@ -577,6 +594,104 @@ public sealed class RadarApp : IDisposable
                 color));
         }
         return result;
+    }
+
+    private IReadOnlyList<RitualLabel> BuildRitualLabels(nint inGameState)
+    {
+        var settings = _radarSettings.GroundItems;
+        if (!settings.Enabled || !_priceBook.IsLoaded)
+            return Array.Empty<RitualLabel>();
+
+        var rewards = _live.ReadRitualRewards(inGameState, _window.Width, _window.Height);
+        if (rewards.Count == 0) return Array.Empty<RitualLabel>();
+
+        var result = new List<RitualLabel>(rewards.Count);
+        foreach (var reward in rewards)
+        {
+            var price = reward.Rarity == Poe2Live.Rarity.Unique
+                ? _priceBook.TryByArtAndName(reward.Art, reward.Name)
+                : _priceBook.TryByName(reward.Name);
+            if (price is not { } value || value.LowConfidence(settings.MinQuantity)) continue;
+
+            var color = value.HighExalted >= settings.HighlightMinEx ? 0xFFFFCC33u : 0xFFEAEAEAu;
+            result.Add(new RitualLabel(
+                reward.X, reward.Y, reward.W, reward.H,
+                _priceBook.Format(value),
+                color,
+                value.HighExalted >= settings.HighlightMinEx));
+        }
+        return result;
+    }
+
+    private IReadOnlyList<MonolithMarker> BuildMonolithMarkers(int areaLevel)
+    {
+        var settings = _radarSettings.Monoliths;
+        if (!settings.Enabled || !_priceBook.IsLoaded || !_monoCatalog.IsLoaded)
+            return Array.Empty<MonolithMarker>();
+
+        var result = new List<MonolithMarker>();
+        foreach (var entity in _entities)
+        {
+            if (entity.Metadata.IndexOf("Expedition2Encounter", StringComparison.OrdinalIgnoreCase) < 0)
+                continue;
+
+            var monolith = _live.ReadMonolith(entity.Address);
+            if (!monolith.Resolved) continue;
+            if (settings.HideCollected && monolith.Collected) continue;
+
+            var offers = _monoCatalog.Offers(
+                monolith.AnchorIdx,
+                monolith.AnchorPos,
+                monolith.HoleCount,
+                monolith.IsUnique,
+                areaLevel);
+            if (offers.Count == 0) continue;
+
+            var rewards = new List<MonolithReward>(offers.Count);
+            double best = 0;
+            var bestName = "";
+            foreach (var offer in offers)
+            {
+                var count = Math.Max(1, offer.Count);
+                var ex = offer.Name.Length > 0 && _priceBook.TryByName(offer.Name) is { } price && !price.LowConfidence(_radarSettings.GroundItems.MinQuantity)
+                    ? price.HighExalted * count
+                    : 0;
+                var name = offer.Name.Length > 0 ? offer.Name : offer.Description;
+                rewards.Add(new MonolithReward(name, count, ex, offer.Size, offer.Runes));
+                if (ex > best)
+                {
+                    best = ex;
+                    bestName = name;
+                }
+            }
+
+            if (settings.MinValueEx > 0 && best < settings.MinValueEx) continue;
+            rewards.Sort((a, b) => b.Ex.CompareTo(a.Ex));
+
+            var anchor = monolith.IsUnique
+                ? "Unique"
+                : monolith.AnchorIdx >= 0 ? _monoCatalog.RuneName(monolith.AnchorIdx) : "?";
+            result.Add(new MonolithMarker(
+                entity.Grid,
+                monolith.HoleCount,
+                monolith.IsUnique,
+                monolith.Collected,
+                anchor,
+                best,
+                bestName,
+                MonolithColor(best, settings.HighlightMinEx),
+                rewards));
+        }
+
+        return result;
+    }
+
+    private static uint MonolithColor(double bestEx, double threshold)
+    {
+        if (bestEx <= 0 || threshold <= 0) return 0xFFFFFFFFu;
+        if (bestEx >= threshold) return 0xFF66E066u;
+        if (bestEx >= threshold * 0.6) return 0xFFE6C84Du;
+        return 0xFFFFFFFFu;
     }
 
     private static string PriceCategoryGroup(string category)
@@ -731,6 +846,9 @@ public sealed class RadarApp : IDisposable
         var marks = new List<AtlasMark>(Math.Min(nodes.Count, 256));
         foreach (var n in nodes)
         {
+            if (_radarSettings.AtlasHideVisitedMaps && n.Visited) continue;
+            if (_radarSettings.AtlasHideCompletedMaps && n.Completion != 0) continue;
+
             var selected = pinned.Contains(AtlasNodeKey(n.Element));
             var matchedTrack = MatchAtlasRule(track, n);
             var matchedArrow = MatchAtlasRule(arrow, n);
@@ -742,9 +860,12 @@ public sealed class RadarApp : IDisposable
                 continue;
 
             var matched = matchedTrack ?? matchedArrow ?? semantic.Label;
+            var defaultLabel = string.Equals(matched, "Map", StringComparison.OrdinalIgnoreCase)
+                ? AtlasNodeLabel(n)
+                : matched ?? AtlasNodeLabel(n);
             var label = matched != null && _radarSettings.AtlasRuleLabels.TryGetValue(matched, out var alias) && !string.IsNullOrWhiteSpace(alias)
                 ? alias
-                : matched ?? AtlasNodeLabel(n);
+                : defaultLabel;
             var color = selected
                 ? _radarSettings.AtlasWaypointColor
                 : matched != null && _radarSettings.AtlasHighlightColors.TryGetValue(matched, out var configured)
@@ -846,9 +967,7 @@ public sealed class RadarApp : IDisposable
         var curY = (pt.Y - offset.Y) / Math.Max(0.0001f, scale);
 
         Poe2Atlas.AtlasNodeLive? bestIn = null;
-        Poe2Atlas.AtlasNodeLive? bestAny = null;
         var bestInDist = double.MaxValue;
-        var bestAnyDist = double.MaxValue;
         foreach (var node in nodes)
         {
             if (!float.IsFinite(node.X) || !float.IsFinite(node.Y)) continue;
@@ -857,14 +976,8 @@ public sealed class RadarApp : IDisposable
             var dx = curX - cx;
             var dy = curY - cy;
             var dist = dx * dx + dy * dy;
-            if (dist < bestAnyDist)
-            {
-                bestAnyDist = dist;
-                bestAny = node;
-            }
-
-            var hw = Math.Max(node.W, 40f) * 0.5f;
-            var hh = Math.Max(node.H, 40f) * 0.5f;
+            var hw = Math.Max(node.W, 18f) * 0.5f;
+            var hh = Math.Max(node.H, 18f) * 0.5f;
             if (Math.Abs(dx) <= hw && Math.Abs(dy) <= hh && dist < bestInDist)
             {
                 bestInDist = dist;
@@ -872,7 +985,7 @@ public sealed class RadarApp : IDisposable
             }
         }
 
-        if ((bestIn ?? bestAny) is not { } picked)
+        if (bestIn is not { } picked)
         {
             Console.WriteLine("\n[atlas tile] no tile under cursor.");
             return;
@@ -1293,7 +1406,7 @@ public sealed class RadarApp : IDisposable
                 {
                     if (e.Category == Poe2Live.EntityCategory.Monster && !e.IsAlive) continue;
                     var rule = _displayRules.Resolve(e);
-                    if (rule?.Navigable != true) continue;
+                    if (rule?.Navigable != true || !MonolithNavAllowed(e)) continue;
                     var d = (e.Grid - playerGrid).Length();
                     if (d >= closestDist) continue;
                     closestDist = d;
@@ -1379,11 +1492,25 @@ public sealed class RadarApp : IDisposable
             : current.Select(p => (X: p.x, Y: p.y)).ToList();
     }
 
+    private bool MonolithNavAllowed(in Poe2Live.EntityDot entity)
+    {
+        if (_radarSettings.Monoliths.MinValueEx <= 0) return true;
+        if (entity.Metadata.IndexOf("Expedition2Encounter", StringComparison.OrdinalIgnoreCase) < 0) return true;
+        foreach (var marker in _monoliths)
+        {
+            if ((marker.Grid - entity.Grid).LengthSquared() < 1f)
+                return true;
+        }
+        return false;
+    }
+
     private void HandleCalibrationKeys()
     {
         if (Down(0x77) && DateTime.UtcNow >= _nextToggleAt)
         {
             _autoFlask = !_autoFlask;
+            _radarSettings.AutoFlaskEnabled = _autoFlask;
+            _radarSettings.Save();
             _nextToggleAt = DateTime.UtcNow.AddMilliseconds(300);
             Console.WriteLine($"\nAuto-flask: {(_autoFlask ? "ON" : "OFF")}");
         }
