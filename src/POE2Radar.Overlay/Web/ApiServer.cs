@@ -112,7 +112,7 @@ public sealed class ApiServer : IDisposable
                     mapVisible = s.MapVisible, zoom = s.Zoom,
                     map = new { visible = s.MapVisible, shiftX = s.MapShiftX, shiftY = s.MapShiftY, zoom = s.Zoom },
                     minimap = new { available = s.GameMinimapAvailable, shiftX = s.GameMinimapShiftX, shiftY = s.GameMinimapShiftY, zoom = s.GameMinimapZoom },
-                    hpPct = s.HpPct, manaPct = s.ManaPct, autoFlask = s.AutoFlask, flask = s.FlaskNote,
+                    hpPct = s.HpPct, manaPct = s.ManaPct, esPct = s.EsPct, autoFlask = s.AutoFlask, flask = s.FlaskNote,
                     player = new { x = s.Player.X, y = s.Player.Y, name = s.CharName, level = s.CharLevel },
                     entityCount = s.Entities.Count, counts,
                 });
@@ -702,7 +702,7 @@ public sealed record RadarState(
     System.Numerics.Vector2 Player,
     IReadOnlyList<Poe2Live.EntityDot> Entities,
     IReadOnlyList<Poe2Live.Landmark> Landmarks,
-    float HpPct, float ManaPct, bool AutoFlask, string FlaskNote,
+    float HpPct, float ManaPct, float EsPct, bool AutoFlask, string FlaskNote,
     string AreaCode, string CharName, int CharLevel,
     string? AreaName = null, int Act = 0, bool IsTown = false, bool HasWaypoint = false,
     float MapShiftX = 0, float MapShiftY = 0,
@@ -711,5 +711,5 @@ public sealed record RadarState(
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,
-            Array.Empty<Poe2Live.EntityDot>(), Array.Empty<Poe2Live.Landmark>(), 100, 100, false, "", "", "", 0);
+            Array.Empty<Poe2Live.EntityDot>(), Array.Empty<Poe2Live.Landmark>(), 100, 100, 0, false, "", "", "", 0);
 }

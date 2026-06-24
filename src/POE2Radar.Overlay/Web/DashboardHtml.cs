@@ -146,7 +146,7 @@ body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:999;ba
 .sidebar-section:after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
 .vital{margin-bottom:14px}.vital-label{display:flex;justify-content:space-between;color:var(--ink-dim);font-size:10px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:5px}
 .vital-label b{color:var(--ink);font-weight:600}.vital-bar{height:8px;border:1px solid var(--line);background:#0c0a07;overflow:hidden}
-.vital-bar i{display:block;height:100%;transition:width .25s ease}.vital-bar.hp i{background:linear-gradient(90deg,#6e1f18,var(--blood-bright))}.vital-bar.mana i{background:linear-gradient(90deg,#23306e,var(--magic))}
+.vital-bar i{display:block;height:100%;transition:width .25s ease}.vital-bar.hp i{background:linear-gradient(90deg,#6e1f18,var(--blood-bright))}.vital-bar.es i{background:linear-gradient(90deg,#1f6e63,#33e0c4)}.vital-bar.mana i{background:linear-gradient(90deg,#23306e,var(--magic))}
 .side-kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px dotted var(--line-soft);font-size:11px}
 .side-kv span:first-child{color:var(--ink-faint)}.side-kv span:last-child{color:var(--ink);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .census{display:grid;grid-template-columns:1fr 1fr;gap:7px}.census-item{border:1px solid var(--line-soft);background:var(--panel);padding:8px 9px}
@@ -218,6 +218,7 @@ code{color:var(--gold-bright)}
 <div class="dashboard-body">
 <aside class="dashboard-sidebar">
   <div class="vital"><div class="vital-label"><span>Life</span><b id="sideHp">--</b></div><div class="vital-bar hp"><i id="sideHpBar" style="width:0"></i></div></div>
+  <div class="vital"><div class="vital-label"><span>Energy Shield</span><b id="sideEs">--</b></div><div class="vital-bar es"><i id="sideEsBar" style="width:0"></i></div></div>
   <div class="vital"><div class="vital-label"><span>Mana</span><b id="sideMana">--</b></div><div class="vital-bar mana"><i id="sideManaBar" style="width:0"></i></div></div>
   <div class="sidebar-section">Zone</div>
   <div class="side-kv"><span>Area</span><span id="sideArea">--</span></div>
@@ -397,12 +398,20 @@ code{color:var(--gold-bright)}
       <input type="number" id="ruleAddCd" value="2" min="0.1" max="30" step="0.5" style="width:50px">
       <label style="font-size:12px;color:#ccc">HP&lt;</label>
       <input type="number" id="ruleAddHp" placeholder="-" min="0" max="100" style="width:50px">
+      <label style="font-size:12px;color:#ccc">HP&gt;</label>
+      <input type="number" id="ruleAddHpAbove" placeholder="-" min="0" max="100" style="width:50px">
       <label style="font-size:12px;color:#ccc">Mana&lt;</label>
       <input type="number" id="ruleAddMana" placeholder="-" min="0" max="100" style="width:50px">
+      <label style="font-size:12px;color:#ccc">Mana&gt;</label>
+      <input type="number" id="ruleAddManaAbove" placeholder="-" min="0" max="100" style="width:50px">
       <label style="font-size:12px;color:#ccc">ES&lt;</label>
       <input type="number" id="ruleAddEs" placeholder="-" min="0" max="100" style="width:50px">
+      <label style="font-size:12px;color:#ccc">ES&gt;</label>
+      <input type="number" id="ruleAddEsAbove" placeholder="-" min="0" max="100" style="width:50px">
       <label style="font-size:12px;color:#ccc">Enemies&ge;</label>
       <input type="number" id="ruleAddEnemies" placeholder="-" min="0" max="50" style="width:50px">
+      <label style="font-size:12px;color:#ccc">Radius:</label>
+      <input type="number" id="ruleAddEnemyRadius" placeholder="60" min="1" max="500" style="width:58px">
       <label style="font-size:12px;color:#ccc">Boss:</label>
       <select id="ruleAddBoss" style="width:60px"><option value="">-</option><option value="true">Yes</option><option value="false">No</option></select>
       <label style="font-size:12px;color:#ccc">Wait(s):</label>
@@ -613,13 +622,16 @@ async function refresh(){
 }
 function updateConsoleState(s){
   const hp=Math.max(0,Math.min(100,Number(s.hpPct)||0));
+  const es=Math.max(0,Math.min(100,Number(s.esPct)||0));
   const mana=Math.max(0,Math.min(100,Number(s.manaPct)||0));
   $('connection').classList.add('live');
   $('connectionText').textContent=s.inGame?'live':'attached';
   $('areaChip').textContent=s.inGame?`${s.areaName||s.areaCode||'Unknown area'} | ${s.player?.name||'Player'}`:'Waiting for in-game';
   $('sideHp').textContent=s.inGame?`${hp.toFixed(0)}%`:'--';
+  $('sideEs').textContent=s.inGame?`${es.toFixed(0)}%`:'--';
   $('sideMana').textContent=s.inGame?`${mana.toFixed(0)}%`:'--';
   $('sideHpBar').style.width=(s.inGame?hp:0)+'%';
+  $('sideEsBar').style.width=(s.inGame?es:0)+'%';
   $('sideManaBar').style.width=(s.inGame?mana:0)+'%';
   $('sideArea').textContent=s.areaName||'--';
   $('sideCode').textContent=s.areaCode||'--';
@@ -1340,30 +1352,97 @@ function parseKey(s){
   if(s.startsWith('0X'))return parseInt(s,16);
   return 0x51;
 }
+let editingRuleIndex=-1;
+function ruleNumInput(i,r,key,label,color,min,max,step='1'){
+  const v=r[key]??'';
+  return `<label style="font-size:11px;color:${color};display:flex;align-items:center;gap:4px">${label}
+    <input type="number" value="${v}" min="${min}" max="${max}" step="${step}" style="width:58px"
+      onchange="updateRule(${i},{${key}:this.value===''?null:parseFloat(this.value)})"></label>`;
+}
+function ruleIntInput(i,r,key,label,color,min,max){
+  const v=r[key]??'';
+  return `<label style="font-size:11px;color:${color};display:flex;align-items:center;gap:4px">${label}
+    <input type="number" value="${v}" min="${min}" max="${max}" step="1" style="width:58px"
+      onchange="updateRule(${i},{${key}:this.value===''?null:parseInt(this.value)})"></label>`;
+}
+function ruleKeyInput(i,r,key,label,color){
+  const v=r[key]?vkName(r[key]):'';
+  return `<label style="font-size:11px;color:${color};display:flex;align-items:center;gap:4px">${label}
+    <input type="text" value="${v}" style="width:48px;text-align:center"
+      onchange="updateRule(${i},{${key}:this.value.trim()===''?null:parseKey(this.value)})"></label>`;
+}
+function ruleBoolSelect(i,r,key,label,color){
+  const v=r[key];
+  return `<label style="font-size:11px;color:${color};display:flex;align-items:center;gap:4px">${label}
+    <select style="width:62px" onchange="updateRule(${i},{${key}:this.value===''?null:this.value==='true'})">
+      <option value="" ${(v===null||v===undefined)?'selected':''}>-</option>
+      <option value="true" ${v===true?'selected':''}>Yes</option>
+      <option value="false" ${v===false?'selected':''}>No</option>
+    </select></label>`;
+}
+function hasRuleValue(r,key){return r[key]!==null&&r[key]!==undefined&&r[key]!=='';}
+function ruleChip(text,color){
+  return `<span style="display:inline-block;border:1px solid #333;background:#090909;color:${color};padding:1px 5px;border-radius:3px;font-size:11px">${text}</span>`;
+}
+function ruleSummary(r){
+  const chips=[];
+  if(hasRuleValue(r,'hpBelow'))chips.push(ruleChip(`HP&lt;${r.hpBelow}`,'#f88'));
+  if(hasRuleValue(r,'hpAbove'))chips.push(ruleChip(`HP&gt;${r.hpAbove}`,'#f88'));
+  if(hasRuleValue(r,'manaBelow'))chips.push(ruleChip(`Mana&lt;${r.manaBelow}`,'#88f'));
+  if(hasRuleValue(r,'manaAbove'))chips.push(ruleChip(`Mana&gt;${r.manaAbove}`,'#88f'));
+  if(hasRuleValue(r,'esBelow'))chips.push(ruleChip(`ES&lt;${r.esBelow}`,'#8ff'));
+  if(hasRuleValue(r,'esAbove'))chips.push(ruleChip(`ES&gt;${r.esAbove}`,'#8ff'));
+  if(hasRuleValue(r,'enemiesNearby'))chips.push(ruleChip(`Enemies&ge;${r.enemiesNearby}`,'#ff8'));
+  if(hasRuleValue(r,'enemiesNearbyRadius'))chips.push(ruleChip(`R${r.enemiesNearbyRadius}`,'#ff8'));
+  if(hasRuleValue(r,'bossNearby'))chips.push(ruleChip(`Boss ${r.bossNearby?'yes':'no'}`,'#fc8'));
+  if(hasRuleValue(r,'waitSec'))chips.push(ruleChip(`Wait ${r.waitSec}s`,'#ccc'));
+  if(hasRuleValue(r,'requireKeyHeld'))chips.push(ruleChip(`Hold ${vkName(r.requireKeyHeld)}`,'#ccc'));
+  if(hasRuleValue(r,'playerMoving'))chips.push(ruleChip(`Moving ${r.playerMoving?'yes':'no'}`,'#ccc'));
+  return chips.length?chips.join(' '):'<span style="color:#666;font-size:11px">No conditions</span>';
+}
+function toggleRuleEdit(i){
+  editingRuleIndex=editingRuleIndex===i?-1:i;
+  refreshRules();
+}
 
 async function refreshRules(){
   const data=await(await fetch('/api/rules')).json();
   $('rulesToggle').textContent=data.enabled?'ON':'OFF';
   $('rulesToggle').style.background=data.enabled?'#2a5a2a':'#5a2a2a';
   $('rulesList').innerHTML=data.rules.map((r,i)=>
-    `<div class="watched-item" style="flex-wrap:wrap">
-      <label><input type="checkbox" ${r.enabled?'checked':''} onchange="updateRule(${i},{enabled:this.checked})"></label>
-      <input type="text" value="${r.name}" style="width:90px;background:#1e1e28;border:1px solid #444;color:#afc;border-radius:3px;padding:2px 6px;font-size:13px;font-weight:bold"
-        onchange="updateRule(${i},{name:this.value})">
-      <span style="color:#78b4ff;font-size:12px">Key: ${vkName(r.key)}</span>
-      <span style="color:#aaa;font-size:11px">CD: ${r.cooldownSec}s</span>
-      ${r.hpBelow?`<span style="color:#f88;font-size:11px">HP&lt;${r.hpBelow}%</span>`:''}
-      ${r.hpAbove?`<span style="color:#f88;font-size:11px">HP&gt;${r.hpAbove}%</span>`:''}
-      ${r.manaBelow?`<span style="color:#88f;font-size:11px">Mana&lt;${r.manaBelow}%</span>`:''}
-      ${r.esBelow?`<span style="color:#8ff;font-size:11px">ES&lt;${r.esBelow}%</span>`:''}
-      ${r.enemiesNearby?`<span style="color:#ff8;font-size:11px">Enemies&ge;${r.enemiesNearby}</span>`:''}
-      ${r.bossNearby===true?'<span style="color:#f80;font-size:11px">Boss nearby</span>':''}
-      ${r.bossNearby===false?'<span style="color:#888;font-size:11px">No boss</span>':''}
-      ${r.waitSec?`<span style="color:#8f8;font-size:11px">Wait ${r.waitSec}s</span>`:''}
-      ${r.requireKeyHeld?`<span style="color:#c8f;font-size:11px">Hold:${vkName(r.requireKeyHeld)}</span>`:''}
-      ${r.playerMoving===true?'<span style="color:#aaf;font-size:11px">Moving</span>':''}
-      ${r.playerMoving===false?'<span style="color:#aaf;font-size:11px">Standing</span>':''}
-      <button class="btn btn-rm" style="margin-left:auto" onclick="deleteRule(${i})">X</button>
+    `<div class="watched-item" style="display:block">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <label title="Enable rule"><input type="checkbox" ${r.enabled?'checked':''} onchange="updateRule(${i},{enabled:this.checked})"></label>
+        <b style="min-width:120px;color:#afc">${esc(r.name||'Skill')}</b>
+        <span style="font-size:11px;color:#78b4ff">Key ${vkName(r.key)}</span>
+        <span style="font-size:11px;color:#aaa">CD ${r.cooldownSec??1}s</span>
+        <span style="display:flex;gap:4px;flex-wrap:wrap">${ruleSummary(r)}</span>
+        <button class="btn" style="margin-left:auto;background:#3a3a24;color:#ffd76d" title="Edit rule" onclick="toggleRuleEdit(${i})">${editingRuleIndex===i?'Done':'Edit'}</button>
+        <button class="btn btn-rm" onclick="deleteRule(${i})">X</button>
+      </div>
+      ${editingRuleIndex===i?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #333">
+        <label style="font-size:11px;color:#afc;display:flex;align-items:center;gap:4px">Name
+          <input type="text" value="${esc(r.name||'')}" style="width:120px;background:#1e1e28;border:1px solid #444;color:#afc;border-radius:3px;padding:2px 6px;font-size:13px;font-weight:bold"
+            onchange="updateRule(${i},{name:this.value})"></label>
+        <label style="font-size:11px;color:#78b4ff;display:flex;align-items:center;gap:4px">Key
+          <input type="text" value="${vkName(r.key)}" style="width:48px;text-align:center"
+            onchange="updateRule(${i},{key:parseKey(this.value)})"></label>
+        <label style="font-size:11px;color:#aaa;display:flex;align-items:center;gap:4px">CD
+          <input type="number" value="${r.cooldownSec??1}" min="0.1" max="60" step="0.1" style="width:58px"
+            onchange="const v=parseFloat(this.value);if(!isNaN(v))updateRule(${i},{cooldownSec:v})"></label>
+        ${ruleNumInput(i,r,'hpBelow','HP<','#f88',0,100)}
+        ${ruleNumInput(i,r,'hpAbove','HP>','#f88',0,100)}
+        ${ruleNumInput(i,r,'manaBelow','Mana<','#88f',0,100)}
+        ${ruleNumInput(i,r,'manaAbove','Mana>','#88f',0,100)}
+        ${ruleNumInput(i,r,'esBelow','ES<','#8ff',0,100)}
+        ${ruleNumInput(i,r,'esAbove','ES>','#8ff',0,100)}
+        ${ruleIntInput(i,r,'enemiesNearby','Enemies&ge;','#ff8',0,100)}
+        ${ruleIntInput(i,r,'enemiesNearbyRadius','Radius','#ff8',1,500)}
+        ${ruleBoolSelect(i,r,'bossNearby','Boss','#fc8')}
+        ${ruleNumInput(i,r,'waitSec','Wait(s)','#ccc',0,10,'0.1')}
+        ${ruleBoolSelect(i,r,'playerMoving','Moving','#ccc')}
+        ${ruleKeyInput(i,r,'requireKeyHeld','Hold Key','#ccc')}
+      </div>`:''}
     </div>`
   ).join('')||'<div style="color:#666;padding:8px">No rules. Add one below.</div>';
 }
@@ -1380,9 +1459,13 @@ async function addRule(){
   const key=parseKey($('ruleAddKey').value||'Q');
   const cd=parseFloat($('ruleAddCd').value)||2;
   const hp=$('ruleAddHp').value?parseFloat($('ruleAddHp').value):null;
+  const hpAbove=$('ruleAddHpAbove').value?parseFloat($('ruleAddHpAbove').value):null;
   const mana=$('ruleAddMana').value?parseFloat($('ruleAddMana').value):null;
+  const manaAbove=$('ruleAddManaAbove').value?parseFloat($('ruleAddManaAbove').value):null;
   const es=$('ruleAddEs').value?parseFloat($('ruleAddEs').value):null;
+  const esAbove=$('ruleAddEsAbove').value?parseFloat($('ruleAddEsAbove').value):null;
   const enemies=$('ruleAddEnemies').value?parseInt($('ruleAddEnemies').value):null;
+  const enemyRadius=$('ruleAddEnemyRadius').value?parseInt($('ruleAddEnemyRadius').value):null;
   const bossVal=$('ruleAddBoss').value;
   const boss=bossVal==='true'?true:bossVal==='false'?false:null;
   const wait=$('ruleAddWait').value?parseFloat($('ruleAddWait').value):null;
@@ -1391,8 +1474,8 @@ async function addRule(){
   const movingVal=$('ruleAddMoving').value;
   const moving=movingVal==='true'?true:movingVal==='false'?false:null;
   await fetch('/api/rules',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({name,key,enabled:true,cooldownSec:cd,hpBelow:hp,manaBelow:mana,esBelow:es,enemiesNearby:enemies,bossNearby:boss,waitSec:wait,requireKeyHeld:holdKey,playerMoving:moving})});
-  $('ruleAddName').value='';$('ruleAddKey').value='';$('ruleAddHoldKey').value='';refreshRules();
+    body:JSON.stringify({name,key,enabled:true,cooldownSec:cd,hpBelow:hp,hpAbove:hpAbove,manaBelow:mana,manaAbove:manaAbove,esBelow:es,esAbove:esAbove,enemiesNearby:enemies,enemiesNearbyRadius:enemyRadius,bossNearby:boss,waitSec:wait,requireKeyHeld:holdKey,playerMoving:moving})});
+  $('ruleAddName').value='';$('ruleAddKey').value='';$('ruleAddHp').value='';$('ruleAddHpAbove').value='';$('ruleAddMana').value='';$('ruleAddManaAbove').value='';$('ruleAddEs').value='';$('ruleAddEsAbove').value='';$('ruleAddEnemies').value='';$('ruleAddEnemyRadius').value='';$('ruleAddBoss').value='';$('ruleAddWait').value='';$('ruleAddMoving').value='';$('ruleAddHoldKey').value='';refreshRules();
 }
 
 // ── PATHING ──

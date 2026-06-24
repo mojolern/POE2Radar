@@ -235,7 +235,7 @@ public sealed class OverlayRenderer : IDisposable
         var zoneInfo = ctx.AreaAct > 0 ? $"{zoneName} (Act {ctx.AreaAct}){townTag}" : $"{zoneName}{townTag}";
         var line = !ctx.InGame
             ? "waiting for in-game..."
-            : $"{zoneInfo}  {ctx.CharName ?? ""} Lv{ctx.CharLevel}  HP {ctx.HpPct:F0}%  MP {ctx.ManaPct:F0}%  flask:{ctx.FlaskNote}";
+            : $"{zoneInfo}  {ctx.CharName ?? ""} Lv{ctx.CharLevel}  HP {ctx.HpPct:F0}%  ES {ctx.EsPct:F0}%  MP {ctx.ManaPct:F0}%  flask:{ctx.FlaskNote}";
         rt.FillRectangle(new Vortice.RawRectF(6, 6, 6 + line.Length * cw + 10, 6 + lh), _bPanel!);
         rt.DrawText(line, stf, new Rect(12, 8, 1200, 8 + lh), _bText!, DrawTextOptions.Clip);
 

@@ -75,6 +75,7 @@ public sealed record RenderContext(
     float OffsetY,
     float HpPct,
     float ManaPct,
+    float EsPct,
     string FlaskNote,
     string AreaCode,
     int CharLevel,

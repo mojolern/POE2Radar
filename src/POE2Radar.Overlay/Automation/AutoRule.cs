@@ -14,11 +14,18 @@ public sealed class AutoRule
     public float? HpAbove { get; set; }
     public float? ManaBelow { get; set; }
     public float? ManaAbove { get; set; }
+    public float? EsBelow { get; set; }
+    public float? EsAbove { get; set; }
     public int? EnemiesNearby { get; set; }
     public int? EnemiesNearbyRadius { get; set; }
+    public bool? BossNearby { get; set; }
+    public float? WaitSec { get; set; }
+    public int? RequireKeyHeld { get; set; }
+    public bool? PlayerMoving { get; set; }
 
     // Runtime
     public DateTime LastFired { get; set; } = DateTime.MinValue;
+    public DateTime ConditionMetAt { get; set; } = DateTime.MinValue;
 }
 
 public sealed class AutoRuleEngine
@@ -38,23 +45,59 @@ public sealed class AutoRuleEngine
         if (_rules.Count == 0) LoadDefaults();
     }
 
-    public bool Evaluate(AutoRule rule, float hpPct, float manaPct, int nearbyEnemies)
+    public bool Evaluate(
+        AutoRule rule,
+        float hpPct,
+        float manaPct,
+        float esPct,
+        bool hasEnergyShield,
+        int nearbyEnemies,
+        bool bossNearby,
+        bool requiredKeyHeld,
+        bool playerMoving)
     {
         if (!_enabled || !rule.Enabled) return false;
 
         var now = DateTime.UtcNow;
         if ((now - rule.LastFired).TotalSeconds < rule.CooldownSec) return false;
 
-        if (rule.HpBelow.HasValue && hpPct >= rule.HpBelow.Value) return false;
-        if (rule.HpAbove.HasValue && hpPct <= rule.HpAbove.Value) return false;
-        if (rule.ManaBelow.HasValue && manaPct >= rule.ManaBelow.Value) return false;
-        if (rule.ManaAbove.HasValue && manaPct <= rule.ManaAbove.Value) return false;
-        if (rule.EnemiesNearby.HasValue && nearbyEnemies < rule.EnemiesNearby.Value) return false;
+        var conditionsMet =
+            (!rule.HpBelow.HasValue || hpPct < rule.HpBelow.Value) &&
+            (!rule.HpAbove.HasValue || hpPct > rule.HpAbove.Value) &&
+            (!rule.ManaBelow.HasValue || manaPct < rule.ManaBelow.Value) &&
+            (!rule.ManaAbove.HasValue || manaPct > rule.ManaAbove.Value) &&
+            (!(rule.EsBelow.HasValue || rule.EsAbove.HasValue) || hasEnergyShield) &&
+            (!rule.EsBelow.HasValue || esPct < rule.EsBelow.Value) &&
+            (!rule.EsAbove.HasValue || esPct > rule.EsAbove.Value) &&
+            (!rule.EnemiesNearby.HasValue || nearbyEnemies >= rule.EnemiesNearby.Value) &&
+            (!rule.BossNearby.HasValue || bossNearby == rule.BossNearby.Value) &&
+            (!rule.RequireKeyHeld.HasValue || requiredKeyHeld) &&
+            (!rule.PlayerMoving.HasValue || playerMoving == rule.PlayerMoving.Value);
+
+        if (!conditionsMet)
+        {
+            rule.ConditionMetAt = DateTime.MinValue;
+            return false;
+        }
+
+        if (rule.WaitSec is > 0f)
+        {
+            if (rule.ConditionMetAt == DateTime.MinValue)
+            {
+                rule.ConditionMetAt = now;
+                return false;
+            }
+            if ((now - rule.ConditionMetAt).TotalSeconds < rule.WaitSec.Value) return false;
+        }
 
         return true;
     }
 
-    public void MarkFired(AutoRule rule) => rule.LastFired = DateTime.UtcNow;
+    public void MarkFired(AutoRule rule)
+    {
+        rule.LastFired = DateTime.UtcNow;
+        rule.ConditionMetAt = DateTime.MinValue;
+    }
 
     public void Add(AutoRule rule) { _rules.Add(rule); Save(); }
 

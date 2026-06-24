@@ -104,7 +104,10 @@ public sealed class RadarApp : IDisposable
     private bool _autoFlask = true;
     private DateTime _lifeFiredAt = DateTime.MinValue, _manaFiredAt = DateTime.MinValue;
     private DateTime _nextToggleAt = DateTime.MinValue;
-    private float _hpPct = 100f, _manaPct = 100f;
+    private float _hpPct = 100f, _manaPct = 100f, _esPct = 0f;
+    private NumVec2? _lastAutoSkillGrid;
+    private DateTime _lastAutoSkillGridAt = DateTime.MinValue;
+    private bool _autoSkillPlayerMoving;
     private string _flaskNote = "";
     private string _areaCode = "", _charName = "";
     private string? _areaName;
@@ -456,7 +459,7 @@ public sealed class RadarApp : IDisposable
 
         var minimap = _renderLive.GameMinimap;
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player, snap.Entities, snap.Landmarks,
-            _hpPct, _manaPct, _autoFlask, _flaskNote, snap.AreaCode, _charName, snap.CharLevel,
+            _hpPct, _manaPct, _esPct, _autoFlask, _flaskNote, snap.AreaCode, _charName, snap.CharLevel,
             snap.AreaName, snap.AreaAct, snap.IsTown, snap.HasWaypoint,
             map.ShiftX, map.ShiftY,
             minimap.Available, minimap.ShiftX, minimap.ShiftY, minimap.Zoom,
@@ -478,6 +481,7 @@ public sealed class RadarApp : IDisposable
             OffsetY: _radarSettings.OffsetY,
             HpPct: _hpPct,
             ManaPct: _manaPct,
+            EsPct: _esPct,
             FlaskNote: _flaskNote,
             AreaCode: snap.AreaCode,
             CharLevel: snap.CharLevel,
@@ -1222,24 +1226,53 @@ public sealed class RadarApp : IDisposable
         IReadOnlyList<Poe2Live.EntityDot> entities)
     {
         if (live.PlayerVitals(localPlayer) is not { } v) return;
-        _hpPct = v.HpPct; _manaPct = v.ManaPct;
+        _hpPct = v.HpPct;
+        _manaPct = v.ManaPct;
+        _esPct = v.EsPct;
 
         if (!_autoFlask) { _flaskNote = "OFF (F8)"; return; }
         if (GetForegroundWindow() != _gameHwnd) { _flaskNote = "paused"; return; }
         _flaskNote = "armed";
 
-        // Count nearby enemies for rule conditions
         var playerGrid = live.PlayerGrid(localPlayer) ?? System.Numerics.Vector2.Zero;
-        var nearbyCount = 0;
-        foreach (var e in entities)
+        var now = DateTime.UtcNow;
+        if (_lastAutoSkillGrid is { } lastGrid && _lastAutoSkillGridAt != DateTime.MinValue)
         {
-            if (e.Category != Poe2Live.EntityCategory.Monster || !e.IsAlive) continue;
-            if ((e.Grid - playerGrid).Length() < 60f) nearbyCount++;
+            var dt = Math.Max(0.001, (now - _lastAutoSkillGridAt).TotalSeconds);
+            var dist = (playerGrid - lastGrid).Length();
+            _autoSkillPlayerMoving = dist > 0.05f && dist / dt > 0.5f;
         }
+        _lastAutoSkillGrid = playerGrid;
+        _lastAutoSkillGridAt = now;
 
         foreach (var rule in _autoRules.Rules)
         {
-            if (!_autoRules.Evaluate(rule, _hpPct, _manaPct, nearbyCount)) continue;
+            var nearbyCount = 0;
+            var bossNearby = false;
+            if (rule.EnemiesNearby.HasValue || rule.BossNearby.HasValue)
+            {
+                var radius = Math.Clamp(rule.EnemiesNearbyRadius ?? 60, 1, 500);
+                var radiusSq = radius * radius;
+                foreach (var e in entities)
+                {
+                    if (e.Category != Poe2Live.EntityCategory.Monster || !e.IsAlive) continue;
+                    if ((e.Grid - playerGrid).LengthSquared() >= radiusSq) continue;
+                    nearbyCount++;
+                    bossNearby |= e.IsBoss;
+                }
+            }
+            var requiredKeyHeld = !rule.RequireKeyHeld.HasValue || Down(rule.RequireKeyHeld.Value);
+            if (!_autoRules.Evaluate(
+                    rule,
+                    _hpPct,
+                    _manaPct,
+                    _esPct,
+                    v.HasEs,
+                    nearbyCount,
+                    bossNearby,
+                    requiredKeyHeld,
+                    _autoSkillPlayerMoving))
+                continue;
             SendInputNative.Tap((ushort)rule.Key);
             _autoRules.MarkFired(rule);
             _flaskNote = $"{rule.Name}";

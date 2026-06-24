@@ -257,6 +257,7 @@ public sealed class Poe2Live
         public float HpPct   => HpUnreserved   > 0 ? 100f * HpCur   / HpUnreserved   : 100f;
         public float ManaPct => ManaUnreserved > 0 ? 100f * ManaCur / ManaUnreserved : 100f;
         public float EsPct   => EsUnreserved   > 0 ? 100f * EsCur   / EsUnreserved   : 0f;
+        public bool HasEs => EsUnreserved > 0;
     }
 
     private nint _plLife, _plLifeFor;
