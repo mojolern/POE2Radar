@@ -1,4 +1,5 @@
 using POE2Radar.Core;
+using POE2Radar.Core.Cheats;
 using POE2Radar.Core.Game;
 using System.Runtime.InteropServices;
 
@@ -28,6 +29,12 @@ var reader = new MemoryReader(process);
 
 if (HasFlag(args, "--aob"))
     return RunAobScan(process, reader);
+
+if (HasFlag(args, "--gamestate-aob"))
+    return RunGameStateAobProbe(process, reader);
+
+if (HasFlag(args, "--cheat-scan"))
+    return RunCheatScanProbe(process, reader);
 
 if (HasFlag(args, "--chain"))
     return RunChainProbe(process, reader);
@@ -218,6 +225,14 @@ if (HasFlag(args, "--runeforge-selection-fingerprint-watch"))
 if (HasFlag(args, "--monolith"))
     return RunMonolith(process, reader);
 
+if (HasFlag(args, "--monolith-listener-scan"))
+    return RunMonolithListenerScan(
+        process,
+        reader,
+        TryGetIntArg(args, "--max-entities") ?? 6,
+        TryGetIntArg(args, "--entries") ?? 24,
+        TryGetIntArg(args, "--scan") ?? 0x300);
+
 if (HasFlag(args, "--ritual-shop"))
     return RunRitualShop(process, reader);
 
@@ -285,6 +300,8 @@ Console.WriteLine("  --dump <hexAddr> [--dump-len <N>]   hex-dump a region for i
 Console.WriteLine("  --dump <hexAddr> [--dump-len <N>]   hex-dump a region for inspection");
 Console.WriteLine("  --entity <hexAddr>         walk a PoE2 entity: id, metadata path, component map, Render→grid, Life");
 Console.WriteLine("  --aob                      scan for IngameState via AOB patterns");
+Console.WriteLine("  --gamestate-aob            scan GameState AOB and print chain candidates for patch diagnostics");
+Console.WriteLine("  --cheat-scan               read-only scan for startup byte-patch cheat signatures");
 Console.WriteLine("  --atlas-probe [--atlas-child N] [--atlas-dump-node 0xADDR]  discover Atlas panel/node UI candidates");
 Console.WriteLine("  --atlas-snapshot [--atlas-samples N]  validate the Core Atlas snapshot reader");
 Console.WriteLine("  --atlas-rect-scan [--atlas-samples N]  scan Atlas nodes for final screen/client rect offsets");
@@ -321,6 +338,8 @@ Console.WriteLine("                             scan Runeforge entities for reci
 Console.WriteLine("  --runeforge-selection-index-watch [--timeout N] [--component-window N]");
 Console.WriteLine("                             snapshot Runeforge components before open, then test visible row indexes after open");
 Console.WriteLine("  --monolith                 validate Sikaka v0.14.x Runeshape monolith station/reward catalog path");
+Console.WriteLine("  --monolith-listener-scan [--max-entities N] [--entries N] [--scan N]");
+Console.WriteLine("                             scan StateMachine listener vectors for shifted RuneStation owner links");
 Console.WriteLine("  --ritual-shop              read visible Ritual tribute-shop reward tiles via UiElement item slot");
 Console.WriteLine("  --atlas-mapname [--max N]  verify localized Atlas map names from WorldAreas rows");
 Console.WriteLine("  --atlas-graph              validate live Atlas node graph/path data");
@@ -1003,8 +1022,7 @@ static bool LooksLikeMechanic(string value)
 
 static void PrintMechanicTerrainCandidates(MemoryReader reader, nint areaInstance)
 {
-    const int TerrainOffset = 0x8A0;
-    var terrain = areaInstance + TerrainOffset;
+    var terrain = areaInstance + Poe2.AreaInstance.TerrainMetadata;
     reader.TryReadStruct<long>(terrain + 0x18, out var tilesX);
     reader.TryReadStruct<nint>(terrain + 0x28, out var first);
     reader.TryReadStruct<nint>(terrain + 0x30, out var last);
@@ -4512,6 +4530,9 @@ static int RunMonolith(ProcessHandle process, MemoryReader reader)
             continue;
         }
 
+        if (TryFindRuneStation(reader, device.Entity, out var station, out _, out _, out _))
+            PrintRuneStationAnchorClues(reader, station);
+
         var anchor = monolith.IsUnique
             ? "unique/anchorless"
             : monolith.AnchorIdx >= 0
@@ -4529,6 +4550,240 @@ static int RunMonolith(ProcessHandle process, MemoryReader reader)
     }
 
     return 0;
+}
+
+static bool TryFindRuneStation(
+    MemoryReader reader,
+    nint entity,
+    out nint station,
+    out int vecOff,
+    out int listenerSub,
+    out int ownerOff)
+{
+    station = 0;
+    vecOff = 0;
+    listenerSub = 0;
+    ownerOff = 0;
+
+    var stateMachine = ResolveComponentAddr(reader, entity, "StateMachine");
+    if (stateMachine == 0) return false;
+
+    var canonicalFirst = SafePtr(reader, stateMachine + Poe2.StateMachine.ListenerVec);
+    if (canonicalFirst != 0 &&
+        reader.TryReadStruct<nint>(stateMachine + Poe2.StateMachine.ListenerVec + 8, out var canonicalLast) &&
+        canonicalLast > canonicalFirst)
+    {
+        var bytes = (long)canonicalLast - canonicalFirst;
+        var count = bytes % 8 == 0 ? bytes / 8 : 0;
+        if (count is > 0 and <= 64)
+        {
+            for (long i = 0; i < count; i++)
+            {
+                var node = SafePtr(reader, canonicalFirst + (nint)(i * 8));
+                var listener = node == 0 ? 0 : SafePtr(reader, node);
+                if (listener == 0) continue;
+
+                var candidate = listener - Poe2.RuneStation.ListenerSub;
+                if (SafePtr(reader, candidate + Poe2.RuneStation.Owner) != entity) continue;
+
+                station = candidate;
+                vecOff = Poe2.StateMachine.ListenerVec;
+                listenerSub = Poe2.RuneStation.ListenerSub;
+                ownerOff = Poe2.RuneStation.Owner;
+                return true;
+            }
+        }
+    }
+
+    for (var vo = 0; vo <= 0x80; vo += 8)
+    {
+        var first = SafePtr(reader, stateMachine + vo);
+        if (first == 0 ||
+            !reader.TryReadStruct<nint>(stateMachine + vo + 8, out var last) ||
+            last <= first)
+            continue;
+
+        var bytes = (long)last - first;
+        if (bytes % 8 != 0) continue;
+        var count = bytes / 8;
+        if (count is <= 0 or > 64) continue;
+
+        for (long i = 0; i < count; i++)
+        {
+            var node = SafePtr(reader, first + (nint)(i * 8));
+            var listener = node == 0 ? 0 : SafePtr(reader, node);
+            if (listener == 0) continue;
+
+            for (var sub = 0x80; sub <= 0xC0; sub += 8)
+            {
+                var candidate = listener - sub;
+                for (var oo = 0; oo <= 0x40; oo += 8)
+                {
+                    if (SafePtr(reader, candidate + oo) != entity) continue;
+
+                    station = candidate;
+                    vecOff = vo;
+                    listenerSub = sub;
+                    ownerOff = oo;
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+static void PrintRuneStationAnchorClues(MemoryReader reader, nint station)
+{
+    Console.WriteLine($"  station ptr: 0x{station:X16}");
+    var ints = new List<string>();
+    for (var off = 0; off <= 0x90; off += 4)
+    {
+        if (!reader.TryReadStruct<int>(station + off, out var value)) continue;
+        if (value is >= -1 and <= 64)
+            ints.Add($"+0x{off:X}={value}");
+    }
+    Console.WriteLine($"  small ints : {(ints.Count == 0 ? "<none>" : string.Join(" ", ints))}");
+
+    var ptrs = new List<string>();
+    for (var off = 0; off <= 0x90; off += 8)
+    {
+        var ptr = SafePtr(reader, station + off);
+        if (ptr == 0) continue;
+        var nested = SafePtr(reader, ptr + 0x28);
+        var nested2 = nested == 0 ? 0 : SafePtr(reader, nested);
+        ptrs.Add($"+0x{off:X}=0x{ptr:X16} nested28=0x{nested:X16}/0x{nested2:X16}");
+    }
+    foreach (var line in ptrs.Take(12))
+        Console.WriteLine($"  ptr clue   : {line}");
+}
+
+static int RunMonolithListenerScan(ProcessHandle process, MemoryReader reader, int maxEntities, int entryLimit, int scanWindow)
+{
+    var slot = FindGameStateSlot(process, reader);
+    if (slot == 0)
+    {
+        Console.Error.WriteLine("Could not lock GameState slot (in game?).");
+        return 1;
+    }
+
+    var live = new Poe2Live(reader, slot);
+    if (!live.TryResolve(out _, out var areaInstance, out var localPlayer))
+    {
+        Console.Error.WriteLine("Could not resolve area.");
+        return 1;
+    }
+
+    var playerGrid = ReadEntityGrid(reader, localPlayer);
+    Console.WriteLine();
+    Console.WriteLine("Runeshape monolith listener scan");
+    Console.WriteLine("--------------------------------");
+    Console.WriteLine($"AreaInfo     : code='{live.AreaCode(areaInstance)}' level={live.AreaLevel(areaInstance)} hash=0x{live.AreaHash(areaInstance):X8}");
+    Console.WriteLine($"Player grid  : {FormatGrid(playerGrid)}");
+    Console.WriteLine($"Entity cap   : {maxEntities}");
+    Console.WriteLine($"Entry limit  : {entryLimit}");
+    Console.WriteLine($"SM scan      : +0x0..+0x{scanWindow:X}");
+    Console.WriteLine("Goal         : find shifted StateMachine listener vectors / RuneStation owner offsets.\n");
+
+    var devices = new List<(uint Id, nint Entity, string Metadata, System.Numerics.Vector2? Grid, float Distance)>();
+    foreach (var mapOffset in new[] { Poe2.AreaInstance.AwakeEntities, Poe2.AreaInstance.SleepingEntities })
+    foreach (var (id, entity, metadata) in EnumerateEntityMap(reader, areaInstance, mapOffset))
+    {
+        if (!metadata.Contains("Expedition2Encounter", StringComparison.OrdinalIgnoreCase)) continue;
+        var grid = ReadEntityGrid(reader, entity);
+        var distance = playerGrid.HasValue && grid.HasValue
+            ? System.Numerics.Vector2.Distance(playerGrid.Value, grid.Value)
+            : float.MaxValue;
+        devices.Add((id, entity, metadata, grid, distance));
+    }
+
+    devices.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+    var totalHits = 0;
+    foreach (var device in devices.Take(Math.Max(1, maxEntities)))
+    {
+        var stateMachine = ResolveComponentAddr(reader, device.Entity, "StateMachine");
+        var distText = device.Distance == float.MaxValue ? "-" : device.Distance.ToString("F1");
+        Console.WriteLine($"ENTITY id={device.Id} addr=0x{device.Entity:X16} dist={distText} grid={FormatGrid(device.Grid)}");
+        Console.WriteLine($"  StateMachine=0x{stateMachine:X16}");
+        if (stateMachine == 0) continue;
+
+        var entityHits = 0;
+        for (var vecOff = 0; vecOff <= scanWindow; vecOff += 8)
+        {
+            var first = SafePtr(reader, stateMachine + vecOff);
+            if (first == 0 ||
+                !reader.TryReadStruct<nint>(stateMachine + vecOff + 8, out var last) ||
+                last <= first)
+                continue;
+
+            var bytes = (long)last - first;
+            if (bytes % 8 != 0) continue;
+            var count = bytes / 8;
+            if (count is <= 0 or > 512) continue;
+
+            var tested = Math.Min(count, Math.Max(1, entryLimit));
+            for (long i = 0; i < tested; i++)
+            {
+                var node = SafePtr(reader, first + (nint)(i * 8));
+                if (node == 0) continue;
+
+                var listeners = new[] { node, SafePtr(reader, node) };
+                for (var li = 0; li < listeners.Length; li++)
+                {
+                    var listener = listeners[li];
+                    if (listener == 0 || (li == 1 && listener == node)) continue;
+
+                    for (var sub = 0; sub <= 0x240; sub += 8)
+                    {
+                        var candidate = listener - sub;
+                        if (candidate == 0) continue;
+
+                        for (var ownerOff = 0; ownerOff <= 0x100; ownerOff += 8)
+                        {
+                            if (SafePtr(reader, candidate + ownerOff) != device.Entity) continue;
+
+                            entityHits++;
+                            totalHits++;
+                            Console.WriteLine(
+                                $"  HIT vec+0x{vecOff:X3} count={count} entry={i} listener[{li}]=0x{listener:X16} " +
+                                $"sub=0x{sub:X} station=0x{candidate:X16} owner+0x{ownerOff:X}");
+                            Console.WriteLine($"      ints: {SummarizeCandidateInts(reader, candidate)}");
+
+                            if (entityHits >= 24)
+                            {
+                                Console.WriteLine("  hit cap reached for this entity");
+                                goto NextEntity;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+NextEntity:
+        if (entityHits == 0)
+            Console.WriteLine("  no listener->station owner hits found");
+    }
+
+    Console.WriteLine($"\nTotal hits: {totalHits}");
+    Console.WriteLine("Interpretation:");
+    Console.WriteLine("  - A hit with vec+0x020 sub=0x98 owner+0x10 matches current committed offsets.");
+    Console.WriteLine("  - Repeated hits with a different vec/sub/owner point to the constants to update.");
+    Console.WriteLine("  - Plausible hole/anchor fields should show as small ints (1..34) near the station candidate.");
+    return 0;
+}
+
+static string SummarizeCandidateInts(MemoryReader reader, nint candidate)
+{
+    var parts = new List<string>();
+    for (var off = 0; off <= 0x90; off += 4)
+    {
+        if (!reader.TryReadStruct<int>(candidate + off, out var value)) continue;
+        if (value is >= -1 and <= 34)
+            parts.Add($"+0x{off:X}={value}");
+    }
+    return parts.Count == 0 ? "<none>" : string.Join(" ", parts.Take(36));
 }
 
 static int RunRitualShop(ProcessHandle process, MemoryReader reader)
@@ -6706,6 +6961,214 @@ static int RunChainProbe(ProcessHandle process, MemoryReader reader)
 // Scans [AreaInstance, +scan) for {ptr Head, int Size} pairs that validate as a std::map of
 // entities: Head is a heap ptr whose Parent (root) leads to a node whose value is an Entity
 // (metadata starts with "Metadata/"). Reports the offset(s) — these are AwakeEntities/Sleeping.
+static int RunCheatScanProbe(ProcessHandle process, MemoryReader reader)
+{
+    Console.WriteLine();
+    Console.WriteLine("Cheat AOB diagnostic");
+    Console.WriteLine("--------------------");
+    Console.WriteLine("Read-only scan for startup byte-patch signatures. No memory is written.");
+
+    var sections = AobScanner.ReadExecutableSections(process, reader);
+    Console.WriteLine($"Executable section groups: {sections.Count}");
+
+    var missing = 0;
+    foreach (var def in CheatDefinition.All())
+    {
+        var hits = new List<(nint SectionBase, byte[] Bytes, int Offset)>();
+        foreach (var (sectionBase, bytes) in sections)
+        {
+            foreach (var match in AobScanner.FindPattern(bytes, def.Pattern))
+                hits.Add((sectionBase, bytes, match));
+        }
+
+        if (hits.Count == 0)
+        {
+            missing++;
+            Console.WriteLine($"[FAIL] {def.ShortName,-5} {def.Name,-18} pattern not found");
+            continue;
+        }
+
+        var first = hits[0];
+        var matchAddress = first.SectionBase + first.Offset;
+        var patchAddress = matchAddress + def.TargetOffset;
+        var readLen = def.Type == CheatType.PatchConstant ? 4 : Math.Max(1, def.PatchBytes.Length);
+        var currentBytes = ReadCheatBytes(reader, patchAddress, readLen);
+        Console.WriteLine($"[OK  ] {def.ShortName,-5} {def.Name,-18} matches={hits.Count,-2} match=0x{matchAddress:X16} patch=0x{patchAddress:X16} bytes={FormatBytes(currentBytes)}");
+
+        if (def.Type == CheatType.PatchConstant)
+            PrintCheatConstantProbe(reader, def, first.SectionBase, first.Bytes, first.Offset);
+        else
+            Console.WriteLine($"       patch bytes: {FormatBytes(def.PatchBytes)}");
+
+        foreach (var extra in hits.Skip(1).Take(4))
+            Console.WriteLine($"       extra match: 0x{(extra.SectionBase + extra.Offset):X16}");
+        if (hits.Count > 5)
+            Console.WriteLine($"       ... {hits.Count - 5} more match(es)");
+    }
+
+    Console.WriteLine();
+    if (missing == 0)
+    {
+        Console.WriteLine("All committed cheat signatures resolved.");
+        return 0;
+    }
+
+    Console.Error.WriteLine($"{missing} cheat signature(s) did not resolve. Those toggles should stay disabled until re-discovered.");
+    return 1;
+}
+
+static void PrintCheatConstantProbe(MemoryReader reader, CheatDefinition def, nint sectionBase, byte[] sectionBytes, int matchOffset)
+{
+    var instrAddr = sectionBase + matchOffset + def.TargetOffset;
+    var dispPos = matchOffset + def.TargetOffset + def.RipDispOffset;
+    if (dispPos + 4 > sectionBytes.Length)
+    {
+        Console.WriteLine("       constant: RIP displacement outside section");
+        return;
+    }
+
+    var ripOffset = BitConverter.ToInt32(sectionBytes, dispPos);
+    var candidate = instrAddr + def.RipInstrLen + ripOffset;
+    var currentBytes = ReadCheatBytes(reader, candidate, 4);
+    if (currentBytes == null)
+    {
+        Console.WriteLine($"       constant: 0x{candidate:X16} unreadable (RIP disp 0x{ripOffset:X})");
+        return;
+    }
+
+    var value = BitConverter.ToSingle(currentBytes, 0);
+    Console.WriteLine($"       constant: 0x{candidate:X16} value={value:G9} bytes={FormatBytes(currentBytes)} ripDisp=0x{ripOffset:X}");
+}
+
+static byte[]? ReadCheatBytes(MemoryReader reader, nint address, int count)
+{
+    if (address == 0 || count <= 0) return null;
+    var bytes = new byte[count];
+    return reader.TryReadBytes(address, bytes) == count ? bytes : null;
+}
+
+static string FormatBytes(byte[]? bytes) =>
+    bytes == null ? "<unreadable>" : string.Join(" ", bytes.Select(b => b.ToString("X2")));
+
+static int RunGameStateAobProbe(ProcessHandle process, MemoryReader reader)
+{
+    Console.WriteLine();
+    Console.WriteLine("GameState AOB diagnostic");
+    Console.WriteLine("------------------------");
+    Console.WriteLine("Goal: verify the root GameState signature and locate where the updated client chain breaks.");
+    Console.WriteLine($"Known offsets: GameState.CurrentStatePtr=0x{Poe2.GameState.CurrentStatePtr:X}, " +
+        $"GameState.States=0x{Poe2.GameState.States:X}, InGameState.AreaInstance=0x{Poe2.InGameState.AreaInstanceData:X}, " +
+        $"AreaInstance.LocalPlayer=0x{Poe2.AreaInstance.LocalPlayer:X}");
+
+    if (AobPatterns.GameStateRefs.Length == 0)
+    {
+        Console.Error.WriteLine("No GameState AOB patterns committed.");
+        return 1;
+    }
+
+    var totalSlots = 0;
+    var resolved = 0;
+    foreach (var pattern in AobPatterns.GameStateRefs)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Pattern: {pattern.Description}");
+        var slots = AobScanner.ScanForResolvedAddresses(process, reader, pattern).Distinct().Take(32).ToList();
+        Console.WriteLine($"Slots matched: {slots.Count}");
+        totalSlots += slots.Count;
+
+        foreach (var slot in slots)
+        {
+            var gameState = SafePtr(reader, slot);
+            Console.WriteLine();
+            Console.WriteLine($"slot=0x{slot:X16} -> gameState=0x{gameState:X16}");
+            if (gameState == 0) continue;
+
+            var currentVector = SafePtr(reader, gameState + Poe2.GameState.CurrentStatePtr);
+            var currentState = currentVector == 0 ? 0 : SafePtr(reader, currentVector);
+            Console.WriteLine($"  current vector field +0x{Poe2.GameState.CurrentStatePtr:X}: 0x{currentVector:X16} first=0x{currentState:X16}");
+            if (PrintInGameStateCandidate(reader, "current[0]", currentState, scanNearby: true))
+                resolved++;
+
+            Console.WriteLine($"  inline states @ +0x{Poe2.GameState.States:X}:");
+            for (var i = 0; i < Poe2.GameState.StateSlotCount; i++)
+            {
+                var offset = Poe2.GameState.States + i * Poe2.GameState.StateSlotStride;
+                var state = SafePtr(reader, gameState + offset);
+                if (state == 0) continue;
+                if (PrintInGameStateCandidate(reader, $"state[{i}] +0x{offset:X}", state, scanNearby: false))
+                    resolved++;
+            }
+        }
+    }
+
+    Console.WriteLine();
+    if (totalSlots == 0)
+    {
+        Console.Error.WriteLine("No GameState AOB matches. The root signature likely changed.");
+        return 2;
+    }
+    if (resolved == 0)
+    {
+        Console.Error.WriteLine("GameState AOB matched, but no candidate resolved to AreaInstance + LocalPlayer.");
+        Console.Error.WriteLine("Likely drift: GameState state slots, InGameState.AreaInstance, or AreaInstance.LocalPlayer.");
+        return 1;
+    }
+
+    Console.WriteLine($"Resolved {resolved} plausible in-game candidate(s).");
+    return 0;
+}
+
+static bool PrintInGameStateCandidate(MemoryReader reader, string label, nint inGameState, bool scanNearby)
+{
+    if (inGameState == 0) return false;
+
+    var areaInstance = SafePtr(reader, inGameState + Poe2.InGameState.AreaInstanceData);
+    var localPlayer = areaInstance == 0 ? 0 : SafePtr(reader, areaInstance + Poe2.AreaInstance.LocalPlayer);
+    var meta = localPlayer == 0 ? "" : ReadEntityMetadata(reader, localPlayer);
+    var ok = meta.StartsWith("Metadata/", StringComparison.Ordinal);
+    Console.WriteLine($"    {label,-18} igs=0x{inGameState:X16} area(+0x{Poe2.InGameState.AreaInstanceData:X})=0x{areaInstance:X16} " +
+        $"local(+0x{Poe2.AreaInstance.LocalPlayer:X})=0x{localPlayer:X16} {(ok ? meta : "")}");
+
+    if (ok) return true;
+    if (areaInstance != 0)
+        PrintAreaLocalPlayerOffsetHits(reader, areaInstance);
+    if (!scanNearby) return false;
+
+    var hits = 0;
+    for (var o = 0; o <= 0x600; o += 8)
+    {
+        if (o == Poe2.InGameState.AreaInstanceData) continue;
+        var candidateArea = SafePtr(reader, inGameState + o);
+        if (candidateArea == 0) continue;
+        var candidateLocal = SafePtr(reader, candidateArea + Poe2.AreaInstance.LocalPlayer);
+        if (candidateLocal == 0) continue;
+        var candidateMeta = ReadEntityMetadata(reader, candidateLocal);
+        if (!candidateMeta.StartsWith("Metadata/", StringComparison.Ordinal)) continue;
+        Console.WriteLine($"      nearby area hit: InGameState+0x{o:X3} -> 0x{candidateArea:X16}, " +
+            $"local=0x{candidateLocal:X16} {candidateMeta}");
+        hits++;
+        if (hits >= 8) break;
+    }
+
+    return false;
+}
+
+static void PrintAreaLocalPlayerOffsetHits(MemoryReader reader, nint areaInstance)
+{
+    var hits = 0;
+    for (var o = 0; o <= 0x1000; o += 8)
+    {
+        if (o == Poe2.AreaInstance.LocalPlayer) continue;
+        var candidateLocal = SafePtr(reader, areaInstance + o);
+        if (candidateLocal == 0) continue;
+        var candidateMeta = ReadEntityMetadata(reader, candidateLocal);
+        if (!candidateMeta.StartsWith("Metadata/", StringComparison.Ordinal)) continue;
+        Console.WriteLine($"      nearby local hit: AreaInstance+0x{o:X3} -> 0x{candidateLocal:X16} {candidateMeta}");
+        hits++;
+        if (hits >= 8) break;
+    }
+}
+
 static int RunFindEntities(ProcessHandle process, MemoryReader reader, int scan)
 {
     var (_, _, areaInstance, _) = ResolveChain(process, reader);

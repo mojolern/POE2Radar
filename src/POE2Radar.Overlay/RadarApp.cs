@@ -216,6 +216,8 @@ public sealed class RadarApp : IDisposable
                 _radarSettings.Styles,
                 _radarSettings.ShowMonsters,
                 _watched.All.Values));
+        else
+            _displayRules.ImportWatched(_watched.All.Values);
         _modCatalog = new ModCatalog(Path.Combine(configDir, "known_mods.json"));
         _priceBook = new PriceBook(
             Path.Combine(configDir, "price_cache.json"),

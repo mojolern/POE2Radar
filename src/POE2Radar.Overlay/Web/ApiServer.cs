@@ -159,7 +159,7 @@ public sealed class ApiServer : IDisposable
                     mods = e.ModList, itemArt = e.ItemArt, itemName = e.ItemName,
                     itemIdentified = e.ItemIdentified, itemMods = e.ItemModList,
                     itemStackCount = e.ItemStackCount,
-                    watched = _watched.IsWatched(e.Metadata),
+                    watched = _displayRules.IsWatched(e.Metadata),
                 });
                 WriteJson(ctx, list);
                 break;
@@ -169,7 +169,7 @@ public sealed class ApiServer : IDisposable
             {
                 if (method == "GET")
                 {
-                    WriteJson(ctx, _watched.All.Values.ToList());
+                    WriteJson(ctx, _displayRules.Watched);
                 }
                 else if (method == "POST")
                 {
@@ -177,7 +177,7 @@ public sealed class ApiServer : IDisposable
                     var entry = JsonSerializer.Deserialize<WatchedEntry>(body, Json);
                     if (entry != null)
                     {
-                        _watched.Add(entry.Pattern, entry.Label, entry.Color, entry.Size);
+                        _displayRules.AddOrUpdateWatched(entry);
                         WriteJson(ctx, new { ok = true });
                     }
                     else WriteJson(ctx, new { error = "bad json" }, 400);
@@ -188,7 +188,7 @@ public sealed class ApiServer : IDisposable
                     var patch = JsonSerializer.Deserialize<WatchedEntry>(body, Json);
                     if (patch != null)
                     {
-                        _watched.Update(patch.Pattern, patch.Label, patch.Color, patch.Enabled, patch.Size);
+                        _displayRules.AddOrUpdateWatched(patch);
                         WriteJson(ctx, new { ok = true });
                     }
                     else WriteJson(ctx, new { error = "bad json" }, 400);
@@ -198,7 +198,7 @@ public sealed class ApiServer : IDisposable
                     var pattern = q["pattern"];
                     if (!string.IsNullOrEmpty(pattern))
                     {
-                        _watched.Remove(pattern);
+                        _displayRules.RemoveWatched(pattern);
                         WriteJson(ctx, new { ok = true });
                     }
                     else WriteJson(ctx, new { error = "missing pattern" }, 400);
@@ -298,7 +298,7 @@ public sealed class ApiServer : IDisposable
 
             case "/api/watched/export":
             {
-                var json = JsonSerializer.Serialize(_watched.All.Values.ToList(), Json);
+                var json = JsonSerializer.Serialize(_displayRules.Watched, Json);
                 ctx.Response.AddHeader("Content-Disposition", "attachment; filename=watched_entities.json");
                 TryWrite(ctx, 200, "application/json", json);
                 break;
@@ -315,16 +315,16 @@ public sealed class ApiServer : IDisposable
                         var added = 0;
                         if (list != null)
                         {
-                            foreach (var e in list)
-                            {
-                                if (!string.IsNullOrEmpty(e.Pattern))
-                                {
-                                    _watched.Add(e.Pattern, e.Label ?? e.Pattern.Split('/')[^1], e.Color ?? "#ff5555");
-                                    added++;
-                                }
-                            }
+                            added = _displayRules.ImportWatched(
+                                list.Where(e => !string.IsNullOrEmpty(e.Pattern))
+                                    .Select(e => e with
+                                    {
+                                        Label = e.Label ?? e.Pattern.Split('/')[^1],
+                                        Color = e.Color ?? "#ff5555",
+                                    }),
+                                overwriteExisting: true);
                         }
-                        WriteJson(ctx, new { ok = true, imported = added, total = _watched.All.Count });
+                        WriteJson(ctx, new { ok = true, imported = added, total = _displayRules.Watched.Count });
                     }
                     catch (Exception ex) { WriteJson(ctx, new { error = ex.Message }, 400); }
                 }

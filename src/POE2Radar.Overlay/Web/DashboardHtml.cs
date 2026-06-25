@@ -241,7 +241,6 @@ code{color:var(--gold-bright)}
 <main class="dashboard-main">
 <div class="tabs">
   <button class="tab active" onclick="showTab('entities')">Live Entities</button>
-  <button class="tab" onclick="showTab('watched')">Watched</button>
   <button class="tab" onclick="showTab('database')">Database</button>
   <button class="tab" onclick="showTab('display')">Display Rules</button>
   <button class="tab" onclick="showTab('settings')">Radar Settings</button>
@@ -269,26 +268,6 @@ code{color:var(--gold-bright)}
   <div class="scrollbox"><table><thead>
     <tr><th>State</th><th>Cat</th><th>Rarity</th><th>Metadata</th><th>HP</th><th>Dist</th><th></th></tr>
   </thead><tbody id="entityBody"></tbody></table></div>
-</div>
-
-<!-- WATCHED -->
-<div class="panel" id="tab-watched">
-  <h2>Add Custom Watch</h2>
-  <div class="add-form">
-    <input type="text" id="addPattern" placeholder="Metadata pattern" style="width:220px">
-    <input type="text" id="addLabel" placeholder="Radar nickname" style="width:130px">
-    <input type="color" id="addColor" value="#ff5555">
-    <button class="btn btn-add" onclick="addWatched()">Add</button>
-  </div>
-  <p style="font-size:11px;color:#666;margin-bottom:8px">The nickname is displayed on the radar overlay next to the entity dot.</p>
-  <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
-    <h2 style="margin:0">Current Watched</h2>
-    <button class="btn btn-save" onclick="exportWatched()" style="margin-left:auto">Export JSON</button>
-    <button class="btn btn-add" onclick="$('importFile').click()">Import JSON</button>
-    <input type="file" id="importFile" accept=".json" style="display:none" onchange="importWatched(this)">
-    <span class="saved" id="importMsg">Imported!</span>
-  </div>
-  <div id="watchedList"></div>
 </div>
 
 <!-- DATABASE -->
@@ -586,7 +565,6 @@ function showTab(name){
   document.querySelector(`.tab[onclick="showTab('${name}')"]`)?.classList.add('active');
   panel.classList.add('active');
   try{localStorage.setItem('radarActiveTab',name)}catch{}
-  if(name==='watched')refreshWatched();
   if(name==='display')loadDisplayPage();
   if(name==='rules')refreshRules();
   if(name==='pathing')refreshPathing();
@@ -733,6 +711,7 @@ function renderDisplayRules(){
         <label>Opacity <input type="number" min="0" max="1" step="0.05" value="${r.opacity??1}" onchange="setDisplayRule(${i},'opacity',parseFloat(this.value))"></label>
         <label>Size <input type="number" min="0.5" max="100" step="0.5" value="${r.size??3}" onchange="setDisplayRule(${i},'size',parseFloat(this.value))"></label>
         <input type="text" value="${esc(r.label||'')}" placeholder="Optional label" onchange="setDisplayRule(${i},'label',this.value||null)">
+        <label><input type="checkbox" ${r.force?'checked':''} onchange="setDisplayRule(${i},'force',this.checked)"> Force draw</label>
         <label><input type="checkbox" ${r.navigable?'checked':''} onchange="setDisplayRule(${i},'navigable',this.checked)"> Auto-path</label>
       </div>
     </div>`:'';
@@ -901,9 +880,10 @@ async function saveDisplayPage(){
 async function quickWatch(meta){
   const parts=meta.split('/');const def=parts[parts.length-1].replace(/@\d+$/,'');
   const nick=prompt('Nickname for radar:',def);if(nick===null)return;
-  await doAdd(meta,nick||def,$('addColor').value);
+  await doAdd(meta,nick||def,'#ff5555');
 }
 async function addWatched(){
+  if(!$('addPattern')||!$('addLabel')||!$('addColor'))return;
   const p=$('addPattern').value.trim(),l=$('addLabel').value.trim(),c=$('addColor').value;
   if(!p)return;await doAdd(p,l||p.split('/').pop(),c);$('addPattern').value='';$('addLabel').value='';
 }
@@ -915,6 +895,7 @@ async function rmByMeta(meta){const w=watched.find(w=>meta.includes(w.pattern));
 async function rmWatched(pattern){await fetch('/api/watched?pattern='+encodeURIComponent(pattern),{method:'DELETE'});refreshWatched();refresh();}
 async function refreshWatched(){
   watched=await(await fetch('/api/watched')).json();
+  if(!$('watchedList'))return;
   $('watchedList').innerHTML=watched.map(w=>
     `<div class="watched-item">
       <input type="color" value="${w.color}" onchange="editWatched('${esc(w.pattern)}',{color:this.value})" title="Color">
@@ -945,7 +926,7 @@ async function importWatched(input){
   try{
     const r=await fetch('/api/watched/import',{method:'POST',headers:{'Content-Type':'application/json'},body:text});
     const res=await r.json();
-    if(res.ok){$('importMsg').textContent=`Imported ${res.imported} entries!`;$('importMsg').classList.add('show');setTimeout(()=>$('importMsg').classList.remove('show'),2000);}
+    if(res.ok&&$('importMsg')){$('importMsg').textContent=`Imported ${res.imported} entries!`;$('importMsg').classList.add('show');setTimeout(()=>$('importMsg').classList.remove('show'),2000);}
     else alert('Import error: '+res.error);
     refreshWatched();refresh();
   }catch(e){alert('Invalid JSON file');}
@@ -1653,7 +1634,7 @@ const minimapDef = [
     {key:'minimapScale',label:'Zoom',type:'num',min:0.1,max:2,step:0.05},
     {key:'minimapOpacity',label:'Opacity',type:'num',min:0.2,max:1,step:0.05},
     {key:'minimapAutoAlignToGame',label:'Auto-align to game minimap',type:'bool'},
-    {key:'minimapPosition',label:'Corner (topleft, topright, bottomleft, bottomright)',type:'text'},
+    {key:'minimapPosition',label:'Corner',type:'select',options:[['bottomright','Bottom Right'],['bottomleft','Bottom Left'],['topright','Top Right'],['topleft','Top Left']]},
     {key:'minimapOffsetX',label:'Offset X (px)',type:'num',min:-2000,max:2000,step:5},
     {key:'minimapOffsetY',label:'Offset Y (px)',type:'num',min:-2000,max:2000,step:5},
     {key:'minimapPlayerBlipSize',label:'Player Blip Size',type:'num',min:1,max:10,step:0.5},
@@ -1689,6 +1670,10 @@ async function loadMinimapSettings(){
         html+=`<input type="checkbox" ${v?'checked':''} onchange="setSetting('${item.key}',this.checked)">`;
       else if(item.type==='color')
         html+=`<input type="color" value="${v}" onchange="setSetting('${item.key}',this.value)">`;
+      else if(item.type==='select')
+        html+=`<select onchange="setSetting('${item.key}',this.value)">`+
+          item.options.map(o=>`<option value="${o[0]}" ${String(v).toLowerCase()===o[0]?'selected':''}>${o[1]}</option>`).join('')+
+          `</select>`;
       else if(item.type==='text')
         html+=`<input type="text" value="${v||''}" style="width:250px" onchange="setSetting('${item.key}',this.value)">`;
       else if(item.type==='num')
@@ -2075,7 +2060,7 @@ async function saveKeybinds(){
 }
 
 try{
-  const savedTab=localStorage.getItem('radarActiveTab');
+  const savedTab=localStorage.getItem('radarActiveTab')==='watched'?'display':localStorage.getItem('radarActiveTab');
   if(savedTab&&$('tab-'+savedTab))showTab(savedTab);
 }catch{}
 ensureHotkeyLegend();refresh();refreshWatched();setInterval(refresh,2000);setInterval(inspAutoTick,2000);

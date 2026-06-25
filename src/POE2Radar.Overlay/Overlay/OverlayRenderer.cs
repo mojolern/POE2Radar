@@ -1136,8 +1136,8 @@ public sealed class OverlayRenderer : IDisposable
             var displayRule = ctx.DisplayRules?.Resolve(e);
             if (ctx.DisplayRules != null && displayRule == null) continue;
             if (displayRule?.Hide == true) continue;
-            var watchMatch = ctx.Watched?.Match(e.Metadata);
-            var isWatched = watchMatch is { Enabled: true };
+            var forceDraw = displayRule?.Force == true;
+            var isWatchedRule = string.Equals(displayRule?.Source, "Watched", StringComparison.OrdinalIgnoreCase);
             var styles = rs?.Styles;
             var mechMatch = styles != null ? MatchMechanic(styles, e.Metadata) : null;
             var isMechanicEntity = mechMatch != null || e.IsLeagueMechanic || e.IsMechanicAnchor;
@@ -1147,9 +1147,9 @@ public sealed class OverlayRenderer : IDisposable
                 (mechMatch != null || e.IsLeagueMechanic);
             if (hidden != null && hidden.IsHidden(e.Metadata)) continue;
             if (isMechanicMonster && rs?.ShowMechanicMonsters != true) continue;
-            if (!isWatched && hideJunk && JunkFilter.IsJunk(e.Metadata)) continue;
+            if (!forceDraw && hideJunk && JunkFilter.IsJunk(e.Metadata)) continue;
             var drawRange = rs?.EntityDrawRange ?? 0f;
-            if (!isWatched &&
+            if (!forceDraw &&
                 drawRange > 0 &&
                 e.Category != Poe2Live.EntityCategory.Transition &&
                 !e.IsMechanicAnchor)
@@ -1157,11 +1157,11 @@ public sealed class OverlayRenderer : IDisposable
                 var dx = e.Grid.X - player.X; var dy = e.Grid.Y - player.Y;
                 if (dx * dx + dy * dy > drawRange * drawRange) continue;
             }
-            if (!isWatched && !e.IsTargetable && rs?.HideUntargetable == true && !e.IsMechanicAnchor) continue;
-            if (!isWatched && e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowFriendlyEntities == false) continue;
-            if (!isWatched && e.IsImmobile && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowImmobileEntities == false) continue;
+            if (!forceDraw && !e.IsTargetable && rs?.HideUntargetable == true && !e.IsMechanicAnchor) continue;
+            if (!forceDraw && e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowFriendlyEntities == false) continue;
+            if (!forceDraw && e.IsImmobile && e.Category == Poe2Live.EntityCategory.Monster && rs?.ShowImmobileEntities == false) continue;
             var minHp = rs?.MinEntityHpPct ?? 0f;
-            if (!isWatched && minHp > 0 && e.HasLife && e.IsAlive && e.HpFraction * 100f < minHp) continue;
+            if (!forceDraw && minHp > 0 && e.HasLife && e.IsAlive && e.HpFraction * 100f < minHp) continue;
             string shapeName; float r; ID2D1SolidColorBrush brush;
 
             // Mechanic overrides are visual styling only; they must still obey monster death/clutter filters.
@@ -1171,13 +1171,13 @@ public sealed class OverlayRenderer : IDisposable
             {
                 // Unknown is not alive. Suppress it until the retryable Life read recovers instead
                 // of leaving a permanent mechanic marker backed by an unreadable 0/0 vital block.
-                if (!isWatched &&
+                if (!forceDraw &&
                     e.LifeState == Poe2Live.EntityLifeState.Unknown &&
                     !e.IsMechanicAnchor)
                     continue;
                 if (e.IsDead)
                 {
-                    if (!isWatched &&
+                    if (!forceDraw &&
                         isMechanicEntity &&
                         !e.IsMechanicAnchor &&
                         rs?.HideDeadMechanicMonsters != false)
@@ -1186,17 +1186,17 @@ public sealed class OverlayRenderer : IDisposable
                         if (fadeSeconds <= 0f || e.DeadForSeconds >= fadeSeconds) continue;
                         deadAlpha = Math.Clamp(1f - e.DeadForSeconds / fadeSeconds, 0f, 1f);
                     }
-                    else if (!isWatched && rs?.ShowDeadMonsters != true)
+                    else if (!forceDraw && rs?.ShowDeadMonsters != true)
                     {
                         continue;
                     }
                 }
             }
 
-            if (!isWatched && isMechanicEntity && e.IconComplete) continue;
-            if (!isWatched && e.IsMechanicAnchor && rs?.ShowPreloadedMechanicLocations == false) continue;
-            if (!isWatched && isMechanicEntity && rs?.ShowMechanicIcons == false) continue;
-            if (!isWatched && mechMatch != null)
+            if (!forceDraw && isMechanicEntity && e.IconComplete) continue;
+            if (!forceDraw && e.IsMechanicAnchor && rs?.ShowPreloadedMechanicLocations == false) continue;
+            if (!forceDraw && isMechanicEntity && rs?.ShowMechanicIcons == false) continue;
+            if (!forceDraw && mechMatch != null)
             {
                 if (e.Category != Poe2Live.EntityCategory.Monster &&
                     !e.IsMechanicAnchor &&
@@ -1208,11 +1208,6 @@ public sealed class OverlayRenderer : IDisposable
             {
                 SetStyleBrush(displayRule.Color, displayRule.Opacity * deadAlpha);
                 (shapeName, r, brush) = (displayRule.Shape, displayRule.Size, _bStyle!);
-            }
-            else if (isWatched)
-            {
-                SetStyleBrush(watchMatch!.Color, 1f);
-                (shapeName, r, brush) = ("Diamond", watchMatch.Size, _bStyle!);
             }
             else if (mechMatch != null)
             {
@@ -1302,9 +1297,12 @@ public sealed class OverlayRenderer : IDisposable
             if (outW > 0 && _bOutline != null)
                 DrawStyledIcon(rt, shapeName, p, r + outW, _bOutline, filled: true);
             DrawStyledIcon(rt, shapeName, p, r, brush, filled: true);
+            if (forceDraw)
+                rt.DrawEllipse(new Ellipse(p, r + 2, r + 2), _bText!, 1.5f);
             ctx.EntityScreenPositions?.Add((p.X, p.Y, e.Metadata));
 
-            if (!string.IsNullOrWhiteSpace(displayRule?.Label))
+            if (!string.IsNullOrWhiteSpace(displayRule?.Label) &&
+                (!isWatchedRule || rs?.ShowWatchedLabels != false))
             {
                 var fs = rs?.WatchedFontSize ?? 14f;
                 var tf = GetTextFormat(fs, ref _tfLandmark, ref _lastLmFs);
@@ -1313,17 +1311,6 @@ public sealed class OverlayRenderer : IDisposable
                     tf,
                     new Rect(p.X + r + 4, p.Y - fs / 2, p.X + 300, p.Y + fs),
                     brush);
-            }
-            else if (isWatched)
-            {
-                rt.DrawEllipse(new Ellipse(p, r + 2, r + 2), _bText!, 1.5f);
-                if (rs?.ShowWatchedLabels != false &&
-                    (!isMechanicEntity || rs?.ShowMechanicLabels == true))
-                {
-                    var wFs = rs?.WatchedFontSize ?? 14f;
-                    var wTf = GetTextFormat(wFs, ref _tfLandmark, ref _lastLmFs);
-                    rt.DrawText(watchMatch!.Label, wTf, new Rect(p.X + r + 4, p.Y - wFs / 2, p.X + 300, p.Y + wFs), _bText!);
-                }
             }
             else if (e.IsMechanicAnchor && rs?.ShowMechanicLabels != false)
             {
@@ -1596,23 +1583,18 @@ public sealed class OverlayRenderer : IDisposable
         if (rs.MinimapAutoAlignToGame && ctx.GameMinimap.Available)
         {
             var gameCenter = new NumVec2(
-                ctx.WindowWidth * 0.5f + ctx.GameMinimap.ShiftX,
+                ctx.WindowWidth * 0.5f + StableMapViewportCorrectionX(ctx) + ctx.GameMinimap.ShiftX,
                 ctx.WindowHeight * 0.5f + ctx.GameMinimap.ShiftY + (ctx.Radar?.MapCenterYShift ?? -20f));
             mx = gameCenter.X - sz / 2f;
             my = gameCenter.Y - sz / 2f;
         }
         else
         {
-            switch (rs.MinimapPosition)
-            {
-                case "topleft":     mx = 10; my = 75; break;
-                case "topright":    mx = ctx.WindowWidth - sz - 10; my = 75; break;
-                case "bottomleft":  mx = 10; my = ctx.WindowHeight - sz - 10; break;
-                default:            mx = ctx.WindowWidth - sz - 10; my = ctx.WindowHeight - sz - 10; break;
-            }
+            (mx, my) = MinimapCornerOrigin(ctx, rs.MinimapPosition, sz);
         }
         mx += rs.MinimapOffsetX;
         my += rs.MinimapOffsetY;
+        (mx, my) = ClampMinimapOrigin(ctx, mx, my, sz);
 
         var center = new NumVec2(mx + sz / 2, my + sz / 2);
 
@@ -1654,8 +1636,8 @@ public sealed class OverlayRenderer : IDisposable
             var displayRule = ctx.DisplayRules?.Resolve(e);
             if (ctx.DisplayRules != null && displayRule == null) continue;
             if (displayRule?.Hide == true) continue;
-            var watched = ctx.Watched?.Match(e.Metadata);
-            var isWatched = watched is { Enabled: true };
+            var forceDraw = displayRule?.Force == true;
+            var isWatchedRule = string.Equals(displayRule?.Source, "Watched", StringComparison.OrdinalIgnoreCase);
             var minimapMechanicStyle = rs.Styles != null ? MatchMechanic(rs.Styles, e.Metadata) : null;
             var minimapMechanic = e.IsLeagueMechanic ||
                 e.IsMechanicAnchor ||
@@ -1666,23 +1648,23 @@ public sealed class OverlayRenderer : IDisposable
                 (e.IsLeagueMechanic || minimapMechanicStyle != null);
             if (hiddenMm != null && hiddenMm.IsHidden(e.Metadata)) continue;
             if (minimapMechanicMonster && !rs.ShowMechanicMonsters) continue;
-            if (!isWatched && hideJunkMm && JunkFilter.IsJunk(e.Metadata)) continue;
-            if (!isWatched &&
+            if (!forceDraw && hideJunkMm && JunkFilter.IsJunk(e.Metadata)) continue;
+            if (!forceDraw &&
                 e.Category == Poe2Live.EntityCategory.Monster &&
                 (e.LifeState == Poe2Live.EntityLifeState.Unknown ||
                  (e.IsDead && rs.ShowDeadMonsters != true)) &&
                 !e.IsMechanicAnchor)
                 continue;
-            if (!isWatched && minimapMechanic && e.IconComplete) continue;
-            if (!isWatched && e.IsMechanicAnchor && !rs.ShowPreloadedMechanicLocations) continue;
-            if (!isWatched && minimapMechanic && !rs.ShowMechanicIcons) continue;
-            if (!isWatched && minimapMechanic &&
+            if (!forceDraw && minimapMechanic && e.IconComplete) continue;
+            if (!forceDraw && e.IsMechanicAnchor && !rs.ShowPreloadedMechanicLocations) continue;
+            if (!forceDraw && minimapMechanic && !rs.ShowMechanicIcons) continue;
+            if (!forceDraw && minimapMechanic &&
                 e.Category != Poe2Live.EntityCategory.Monster &&
                 !e.IsMechanicAnchor &&
                 !rs.ShowMechanicNonMonsterIcons)
                 continue;
-            if (!isWatched && !e.IsTargetable && rs.HideUntargetable && !e.IsMechanicAnchor) continue;
-            if (!isWatched && e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && !rs.ShowFriendlyEntities) continue;
+            if (!forceDraw && !e.IsTargetable && rs.HideUntargetable && !e.IsMechanicAnchor) continue;
+            if (!forceDraw && e.IsFriendly && e.Category == Poe2Live.EntityCategory.Monster && !rs.ShowFriendlyEntities) continue;
             ID2D1SolidColorBrush? b; float r;
             var minimapShape = "Circle";
             if (displayRule != null)
@@ -1690,11 +1672,6 @@ public sealed class OverlayRenderer : IDisposable
                 SetStyleBrush(displayRule.Color, displayRule.Opacity);
                 (b, r) = (_bStyle, displayRule.Size * mmDotScale);
                 minimapShape = displayRule.Shape;
-            }
-            else if (isWatched)
-            {
-                SetStyleBrush(watched!.Color, 1f);
-                (b, r) = (_bStyle, watched.Size * mmDotScale);
             }
             else if (e.IsMechanicAnchor)
             {
@@ -1741,21 +1718,17 @@ public sealed class OverlayRenderer : IDisposable
             if (b == null) continue;
             var p = Project(new NumVec2(e.Grid.X, e.Grid.Y), player, center, mmScale);
             DrawStyledIcon(rt, minimapShape, p, r, b, filled: true);
+            if (forceDraw)
+                rt.DrawEllipse(new Ellipse(p, r + 2, r + 2), _bText!, 1.2f);
 
             // Minimap labels
             var mmLabelFs = rs.MinimapLabelFontSize;
-            if (!string.IsNullOrWhiteSpace(displayRule?.Label))
+            if (!string.IsNullOrWhiteSpace(displayRule?.Label) &&
+                (!isWatchedRule || (rs.MinimapLabelWatched && (!minimapMechanic || rs.ShowMechanicLabels))))
             {
                 var mmLabelTf = GetTextFormat(mmLabelFs, ref _tfTransition, ref _lastTrFs);
                 rt.DrawText(displayRule.Label, mmLabelTf, new Rect(
                     p.X + r + 2, p.Y - mmLabelFs / 2, p.X + 150, p.Y + mmLabelFs), b);
-            }
-            else if (isWatched &&
-                rs.MinimapLabelWatched &&
-                (!minimapMechanic || rs.ShowMechanicLabels))
-            {
-                var mmLabelTf = GetTextFormat(mmLabelFs, ref _tfTransition, ref _lastTrFs);
-                rt.DrawText(watched!.Label, mmLabelTf, new Rect(p.X + r + 2, p.Y - mmLabelFs / 2, p.X + 150, p.Y + mmLabelFs), b);
             }
             else if (e.IsBoss && e.IsAlive && rs.MinimapLabelBoss)
             {
@@ -1831,6 +1804,32 @@ public sealed class OverlayRenderer : IDisposable
         var d = cell - player;
         var md = MapProjection.GridDeltaToMapDelta(new GameVec2 { X = d.X, Y = d.Y }, scale);
         return new NumVec2(center.X + md.X, center.Y + md.Y);
+    }
+
+    private static (float X, float Y) MinimapCornerOrigin(RenderContext ctx, string? position, float size)
+    {
+        const float margin = 10f;
+        const float topMargin = 75f;
+        var pos = (position ?? "bottomright").Trim().Replace("-", "").Replace("_", "").Replace(" ", "").ToLowerInvariant();
+        var right = MathF.Max(margin, ctx.WindowWidth - size - margin);
+        var bottom = MathF.Max(topMargin, ctx.WindowHeight - size - margin);
+        return pos switch
+        {
+            "topleft" => (margin, topMargin),
+            "topright" => (right, topMargin),
+            "bottomleft" => (margin, bottom),
+            _ => (right, bottom),
+        };
+    }
+
+    private static (float X, float Y) ClampMinimapOrigin(RenderContext ctx, float x, float y, float size)
+    {
+        const float margin = 4f;
+        var maxX = MathF.Max(margin, ctx.WindowWidth - size - margin);
+        var maxY = MathF.Max(margin, ctx.WindowHeight - size - margin);
+        if (!float.IsFinite(x) || !float.IsFinite(y))
+            return (maxX, maxY);
+        return (Math.Clamp(x, margin, maxX), Math.Clamp(y, margin, maxY));
     }
 
     private static bool TryPlayerScreenPoint(RenderContext ctx, out NumVec2 screen)

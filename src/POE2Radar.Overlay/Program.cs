@@ -85,7 +85,23 @@ Console.WriteLine($"Attached to {process.ProcessName} (PID {process.ProcessId})"
 
 var reader = new MemoryReader(process);
 var slot = Bootstrap.ResolveGameStateSlot(process, reader);
-if (slot == 0) return 2;
+if (slot == 0)
+{
+    const string message =
+        "POE2Radar could not resolve the GameState/InGameState chain.\n\n" +
+        "This usually means Path of Exile updated and the root AOB/early offsets drifted, " +
+        "or the character is not fully loaded into an in-game zone.\n\n" +
+        "Load into a zone and run:\n" +
+        "src\\POE2Radar.Research\\bin\\Release\\net10.0-windows\\POE2Radar.Research.exe --gamestate-aob";
+
+    Console.Error.WriteLine();
+    Console.Error.WriteLine(message);
+    try { MessageBox.Show(message, "POE2Radar startup blocked", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+    catch { }
+    Console.WriteLine("Press any key to exit...");
+    try { Console.ReadKey(intercept: true); } catch { }
+    return 2;
+}
 
 Console.WriteLine();
 Console.WriteLine("Running. F9 = settings. Ctrl+C to exit.");

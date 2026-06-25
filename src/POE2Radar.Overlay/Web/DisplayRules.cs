@@ -16,8 +16,11 @@ namespace POE2Radar.Overlay.Web;
 /// </summary>
 public sealed class DisplayRule
 {
+    public const string WatchedSource = "Watched";
+
     public bool Enabled { get; set; } = true;
     public string Name { get; set; } = "";
+    public string? Source { get; set; }
 
     // ── Matcher (unset = "any") ──
     public List<string> Categories { get; set; } = new();   // EntityCategory names; empty = any
@@ -37,6 +40,7 @@ public sealed class DisplayRule
     public float Opacity { get; set; } = 1f;
     public float Size { get; set; } = 3f;
     public string? Label { get; set; }                      // optional text label drawn next to the dot
+    public bool Force { get; set; }
     public bool Navigable { get; set; }                     // reserved (Phase 2): qualifies as a nav target
 }
 
@@ -79,6 +83,18 @@ public sealed class DisplayRules
     /// <summary>All rules in order (snapshot copy; safe to enumerate off-thread / serialize for the API).</summary>
     public IReadOnlyList<DisplayRule> All { get { lock (_gate) return _rules.ToList(); } }
 
+    public IReadOnlyList<WatchedEntry> Watched
+    {
+        get
+        {
+            lock (_gate)
+                return _rules
+                    .Where(IsWatchedRule)
+                    .Select(ToWatchedEntry)
+                    .ToList();
+        }
+    }
+
     /// <summary>
     /// The first ENABLED rule that matches the entity, or null if none (→ not drawn). Lock-free hot path:
     /// reads the volatile precompiled snapshot. The returned rule's action fields tell the caller whether
@@ -90,6 +106,20 @@ public sealed class DisplayRules
         foreach (var c in snap)
             if (c.Matches(in e)) return c.Rule;
         return null;
+    }
+
+    public bool IsWatched(string metadata) => MatchWatched(metadata) is { Enabled: true };
+
+    public WatchedEntry? MatchWatched(string metadata)
+    {
+        WatchedEntry? best = null;
+        foreach (var entry in Watched)
+        {
+            if (!metadata.Contains(entry.Pattern, StringComparison.OrdinalIgnoreCase)) continue;
+            if (best == null || entry.Pattern.Length > best.Pattern.Length)
+                best = entry;
+        }
+        return best;
     }
 
     /// <summary>
@@ -161,6 +191,53 @@ public sealed class DisplayRules
         }
     }
 
+    public void AddOrUpdateWatched(WatchedEntry entry)
+    {
+        var rule = FromWatched(entry);
+        lock (_gate)
+        {
+            var index = _rules.FindIndex(r => IsWatchedRuleOrLegacy(r, entry.Pattern));
+            if (index >= 0) _rules[index] = rule;
+            else _rules.Insert(0, rule);
+            Rebuild(); Save();
+        }
+    }
+
+    public int ImportWatched(IEnumerable<WatchedEntry> entries, bool overwriteExisting = false)
+    {
+        var changed = 0;
+        lock (_gate)
+        {
+            foreach (var entry in entries.Where(e => !string.IsNullOrWhiteSpace(e.Pattern)))
+            {
+                var index = _rules.FindIndex(r => IsWatchedRuleOrLegacy(r, entry.Pattern));
+                if (index >= 0)
+                {
+                    if (!overwriteExisting) continue;
+                    _rules[index] = FromWatched(entry);
+                    changed++;
+                    continue;
+                }
+                _rules.Insert(0, FromWatched(entry));
+                changed++;
+            }
+            if (changed > 0) { Rebuild(); Save(); }
+        }
+        return changed;
+    }
+
+    public bool RemoveWatched(string pattern)
+    {
+        lock (_gate)
+        {
+            var removed = _rules.RemoveAll(r => IsWatchedRule(r) &&
+                r.Match.Any(m => string.Equals(m, pattern, StringComparison.OrdinalIgnoreCase)));
+            if (removed <= 0) return false;
+            Rebuild(); Save();
+            return true;
+        }
+    }
+
     /// <summary>
     /// Build the default ordered ruleset that REPRODUCES the legacy three-system behavior, used to
     /// seed <c>display_rules.json</c> on first run. Order encodes the old precedence:
@@ -188,12 +265,7 @@ public sealed class DisplayRules
         // 2) Watched highlights (force-draw + label; substring, any category) — before mechanics so
         //    watched still wins, matching the old DrawMap precedence.
         foreach (var w in watched)
-            rules.Add(new DisplayRule
-            {
-                Name = string.IsNullOrWhiteSpace(w.Label) ? w.Pattern : w.Label,
-                Enabled = w.Enabled, Match = new() { w.Pattern },
-                Shape = "Diamond", Color = w.Color, Opacity = 1f, Size = w.Size, Label = w.Label,
-            });
+            rules.Add(FromWatched(w));
 
         // 3) Mechanic overrides (force-draw, category-gated).
         foreach (var m in st.Mechanics ?? new())
@@ -270,6 +342,46 @@ public sealed class DisplayRules
         }
         catch (Exception ex) { Console.Error.WriteLine($"Display rules save failed: {ex.Message}"); }
     }
+
+    private static bool IsWatchedRule(DisplayRule rule)
+        => string.Equals(rule.Source, DisplayRule.WatchedSource, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsWatchedRuleOrLegacy(DisplayRule rule, string pattern)
+    {
+        if (!rule.Match.Any(m => string.Equals(m, pattern, StringComparison.OrdinalIgnoreCase)))
+            return false;
+        if (IsWatchedRule(rule))
+            return true;
+
+        return string.IsNullOrEmpty(rule.Source) &&
+            rule.Match.Count == 1 &&
+            rule.Categories.Count == 0 &&
+            !rule.Hide &&
+            string.Equals(rule.Shape, "Diamond", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static DisplayRule FromWatched(WatchedEntry entry)
+        => new()
+        {
+            Source = DisplayRule.WatchedSource,
+            Name = string.IsNullOrWhiteSpace(entry.Label) ? entry.Pattern : entry.Label,
+            Enabled = entry.Enabled,
+            Match = new() { entry.Pattern },
+            Shape = "Diamond",
+            Color = string.IsNullOrWhiteSpace(entry.Color) ? "#ff5555" : entry.Color,
+            Opacity = 1f,
+            Size = entry.Size <= 0 ? 7f : entry.Size,
+            Label = string.IsNullOrWhiteSpace(entry.Label) ? entry.Pattern.Split('/')[^1] : entry.Label,
+            Force = true,
+        };
+
+    private static WatchedEntry ToWatchedEntry(DisplayRule rule)
+        => new(
+            rule.Match.FirstOrDefault() ?? rule.Name,
+            string.IsNullOrWhiteSpace(rule.Label) ? rule.Name : rule.Label,
+            string.IsNullOrWhiteSpace(rule.Color) ? "#ff5555" : rule.Color,
+            rule.Enabled,
+            rule.Size <= 0 ? 7f : rule.Size);
 
     /// <summary>A rule precompiled for fast matching: category set + metadata matchers (substring/glob)
     /// + condition codes (0 = any). Built once per Rebuild; immutable thereafter.</summary>
