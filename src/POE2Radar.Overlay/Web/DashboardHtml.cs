@@ -309,7 +309,7 @@ code{color:var(--gold-bright)}
         <label>Highlight minimum (ex)<input type="number" id="priceMin" min="0" step="0.5"></label>
         <label>Unique minimum (ex)<input type="number" id="priceUniqueMin" min="0" step="0.5"></label>
         <label>Minimum stack quantity<input type="number" id="priceQty" min="1" step="1"></label>
-        <label>League / realm<select id="priceLeague"><option value="">Auto current Softcore</option></select></label>
+        <label>League / realm<select id="priceLeague"><option value="">Auto from game (HC/SC)</option></select></label>
       </div>
       <div class="display-rule-flags" style="margin-top:8px">
         <label><input type="checkbox" class="price-cat" value="Uniques"> Uniques</label>
@@ -552,7 +552,7 @@ code{color:var(--gold-bright)}
 </div>
 
 <script>
-let entities=[],watched=[],landmarks=[],db=[],settings={},displayRules=[],knownMods=[],catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set(),hotkeySettingsLoading=false;
+let entities=[],watched=[],landmarks=[],db=[],settings={},displayRules=[],knownMods=[],catFilter='',dbCatFilter='',atlasData=null,atlasPins=new Set(),hotkeySettingsLoading=false,displayRulesLoaded=false;
 let atlasRuleFilterTrack=false, atlasRuleFilterArrow=false;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,"\\'").replace(/"/g,'&quot;');
@@ -590,6 +590,7 @@ async function refresh(){
       :'Waiting for in-game...';
     const alive=$('aliveOnly').checked?'&alive=true':'';
     entities=await(await fetch('/entities?limit=1000'+alive)).json();
+    await ensureDisplayRulesLoaded();
     renderEntities();
   }catch(e){
     $('status').textContent='Connection lost. Retrying automatically.';
@@ -632,20 +633,22 @@ function renderEntities(){
     (!catFilter||e.category===catFilter)&&
     (!sleepingOnly||e.sleeping)&&
     (!search||(e.name||'').toLowerCase().includes(search)||e.metadata.toLowerCase().includes(search)));
-  $('entityBody').innerHTML=f.map(e=>`<tr class="${e.watched?'watched':''}">
+  $('entityBody').innerHTML=f.map(e=>{const ruleIndex=displayRuleIndexForPath(e.metadata);
+    const hasRule=ruleIndex>=0;
+    return `<tr class="${hasRule?'watched':''}">
     <td><span class="source-state ${e.sleeping?'source-sleeping':'source-awake'}">${e.sleeping?'SLEEPING':'AWAKE'}</span></td>
     <td><span class="cat cat-${e.category}">${e.category}</span>${e.boss?'<span style="color:#f44;font-weight:bold" title="Boss"> ★</span>':''}${e.league&&e.league!=='None'?`<span style="color:#0af;font-size:10px" title="League Mechanic"> ${e.league}</span>`:''}</td>
     <td><span class="rarity-${e.rarity}">${e.rarity}</span></td>
     <td class="meta-short" title="${e.metadata}">${e.name||e.metadata}${e.locked?'<span style="color:#fa0" title="Locked"> 🔒</span>':''}${e.large?'<span style="color:#0af" title="Large"> L</span>':''}</td>
     <td>${e.hpMax>0?e.hpCur+'/'+e.hpMax:'-'}</td><td>${e.dist}</td>
     <td style="white-space:nowrap">
-      ${e.watched?`<button class="btn btn-rm" onclick="rmByMeta('${esc(e.metadata)}')">-</button>`
-                 :`<button class="btn btn-add" onclick="quickWatch('${esc(e.metadata)}')">Watch</button>`}
+      ${hasRule?`<button class="btn btn-rm" title="Remove matching display rule" onclick="removeRuleForPath('${esc(e.metadata)}')">-</button>`
+               :`<button class="btn btn-add" title="Create a display rule" onclick="quickRule('${esc(e.metadata)}','${esc(e.category)}')">Rule</button>`}
       <button class="btn" style="background:#2a4a5a;color:#5cf" onclick="navigateTo('${esc(e.metadata)}')">Nav</button>
       ${e.addr?`<button class="btn" style="background:#3a2a4a;color:#c8f" onclick="inspectFromList('${e.addr}')">Inspect</button>`:''}
       <button class="btn" style="background:#4a3a1a;color:#fa0" onclick="hideFromEntity('${esc(e.metadata)}')">Hide</button>
     </td>
-  </tr>`).join('');
+  </tr>`}).join('');
 }
 function setCat(c){catFilter=c;renderEntities();}
 function filterEntities(){renderEntities();}
@@ -764,6 +767,39 @@ function addDisplayRule(){
   renderDisplayRules();
   queueDisplaySave();
 }
+async function ensureDisplayRulesLoaded(force=false){
+  if(displayRulesLoaded&&!force)return;
+  displayRules=await(await fetch('/api/display-rules')).json();
+  displayRules=Array.isArray(displayRules)?displayRules:[];
+  displayRulesLoaded=true;
+}
+function globMatch(term,text){
+  term=String(term||'');text=String(text||'');
+  if(!term)return false;
+  if(term.includes('*')||term.includes('?')){
+    const rx='^'+term.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.')+'$';
+    try{return new RegExp(rx,'i').test(text)}catch{return false}
+  }
+  return text.toLowerCase().includes(term.toLowerCase());
+}
+function isUserDisplayRule(r){
+  const src=String(r.source||'').toLowerCase();
+  return src==='user'||src==='watched'||src==='database'||src==='live entity';
+}
+function displayRuleIndexForPath(path){
+  if(!displayRulesLoaded||!Array.isArray(displayRules))return -1;
+  return displayRules.findIndex(r=>isUserDisplayRule(r)&&(r.match||[]).some(m=>globMatch(m,path)));
+}
+function displayCategoryFromEntity(category){
+  return displayCategories.includes(category)?[category]:[];
+}
+function makeMetadataDisplayRule(pattern,label,color='#ff5555',size=7,categories=[]){
+  return {source:'User',enabled:true,name:label||pattern.split('/').pop(),categories,match:[pattern],mods:[],hide:false,shape:'Diamond',color,opacity:1,size,label:label||pattern.split('/').pop(),force:true,navigable:false,_open:true};
+}
+function displayRuleToWatchedEntry(r){
+  const pattern=(r.match||[])[0]||r.name||'';
+  return {pattern,label:r.label||r.name||pattern,color:r.color||'#ff5555',enabled:r.enabled!==false,size:r.size||7};
+}
 function addDisplayRuleFromEntity(){
   const query=prompt('Search live entity name or metadata:','');
   if(query===null)return;
@@ -777,7 +813,7 @@ function addDisplayRuleFromEntity(){
     choice=Math.max(0,Math.min(matches.length-1,(parseInt(selected)||1)-1));
   }
   const e=matches[choice],term=(e.metadata||'').split('/').pop().replace(/@\d+$/,'');
-  displayRules.unshift({enabled:true,name:e.name||term,categories:[e.category],match:[term],mods:[],hide:false,shape:'Star',color:'#ffd926',opacity:1,size:6,navigable:false,_open:true});
+  displayRules.unshift({source:'User',enabled:true,name:e.name||term,categories:[e.category],match:[term],mods:[],hide:false,shape:'Star',color:'#ffd926',opacity:1,size:6,label:e.name||term,force:true,navigable:false,_open:true});
   renderDisplayRules();
   queueDisplaySave();
 }
@@ -791,6 +827,7 @@ async function loadDisplayPage(){
       fetch('/api/price-leagues').then(r=>r.ok?r.json():[]).catch(()=>[])
     ]);
     displayRules=Array.isArray(rules)?rules:[];
+    displayRulesLoaded=true;
     knownMods=mods.mods||[];
     $('knownMods').innerHTML=knownMods.map(m=>`<option value="${esc(m)}">`).join('');
     settings=radar;
@@ -818,7 +855,7 @@ async function loadDisplayPage(){
 }
 function renderPriceLeagues(leagues,selected,active){
   const host=$('priceLeague'); if(!host)return;
-  const opts=['<option value="">Auto current Softcore</option>'];
+  const opts=['<option value="">Auto from game (HC/SC)</option>'];
   const seen=new Set(['']);
   const list=Array.isArray(leagues)?leagues:[];
   const add=(value,label)=>{
@@ -877,24 +914,35 @@ async function saveDisplayPage(){
   await loadDisplayPage();
 }
 
-async function quickWatch(meta){
+async function quickRule(meta,category){
   const parts=meta.split('/');const def=parts[parts.length-1].replace(/@\d+$/,'');
   const nick=prompt('Nickname for radar:',def);if(nick===null)return;
-  await doAdd(meta,nick||def,'#ff5555');
+  await addMetadataDisplayRule(meta,nick||def,'#ff5555',7,displayCategoryFromEntity(category));
 }
-async function addWatched(){
-  if(!$('addPattern')||!$('addLabel')||!$('addColor'))return;
-  const p=$('addPattern').value.trim(),l=$('addLabel').value.trim(),c=$('addColor').value;
-  if(!p)return;await doAdd(p,l||p.split('/').pop(),c);$('addPattern').value='';$('addLabel').value='';
+async function addMetadataDisplayRule(pattern,label,color='#ff5555',size=7,categories=[]){
+  await ensureDisplayRulesLoaded(true);
+  const existing=displayRuleIndexForPath(pattern);
+  const rule=makeMetadataDisplayRule(pattern,label,color,size,categories);
+  if(existing>=0)displayRules[existing]={...displayRules[existing],...rule,_open:displayRules[existing]._open};
+  else displayRules.unshift(rule);
+  await saveDisplayRulesOnly();
+  renderDisplayRules();
+  refresh();
 }
-async function doAdd(pattern,label,color,size=7){
-  await fetch('/api/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pattern,label,color,enabled:true,size})});
-  refresh();refreshWatched();
+async function rmByMeta(meta){await removeRuleForPath(meta);}
+async function removeRuleForPath(path){
+  await ensureDisplayRulesLoaded(true);
+  const i=displayRuleIndexForPath(path);
+  if(i<0)return;
+  displayRules.splice(i,1);
+  await saveDisplayRulesOnly();
+  renderDisplayRules();
+  refresh();
 }
-async function rmByMeta(meta){const w=watched.find(w=>meta.includes(w.pattern));if(w)await rmWatched(w.pattern);}
-async function rmWatched(pattern){await fetch('/api/watched?pattern='+encodeURIComponent(pattern),{method:'DELETE'});refreshWatched();refresh();}
+async function rmWatched(pattern){await removeRuleForPath(pattern);}
 async function refreshWatched(){
-  watched=await(await fetch('/api/watched')).json();
+  await ensureDisplayRulesLoaded(true);
+  watched=displayRules.filter(isUserDisplayRule).map(displayRuleToWatchedEntry);
   if(!$('watchedList'))return;
   $('watchedList').innerHTML=watched.map(w=>
     `<div class="watched-item">
@@ -912,7 +960,7 @@ async function refreshWatched(){
 async function editWatched(pattern,changes){
   const w=watched.find(w=>w.pattern===pattern);if(!w)return;
   const updated={...w,...changes};
-  await fetch('/api/watched',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(updated)});
+  await addMetadataDisplayRule(updated.pattern,updated.label,updated.color,updated.size);
   refreshWatched();
 }
 function exportWatched(){
@@ -924,10 +972,21 @@ async function importWatched(input){
   if(!input.files[0])return;
   const text=await input.files[0].text();
   try{
-    const r=await fetch('/api/watched/import',{method:'POST',headers:{'Content-Type':'application/json'},body:text});
-    const res=await r.json();
-    if(res.ok&&$('importMsg')){$('importMsg').textContent=`Imported ${res.imported} entries!`;$('importMsg').classList.add('show');setTimeout(()=>$('importMsg').classList.remove('show'),2000);}
-    else alert('Import error: '+res.error);
+    const list=JSON.parse(text);
+    let imported=0;
+    await ensureDisplayRulesLoaded(true);
+    if(Array.isArray(list)){
+      for(const w of list){
+        if(!w.pattern)continue;
+        const i=displayRuleIndexForPath(w.pattern);
+        const rule=makeMetadataDisplayRule(w.pattern,w.label||w.pattern.split('/').pop(),w.color||'#ff5555',w.size||7);
+        if(i>=0)displayRules[i]={...displayRules[i],...rule};
+        else displayRules.unshift(rule);
+        imported++;
+      }
+      await saveDisplayRulesOnly();
+    }
+    if($('importMsg')){$('importMsg').textContent=`Imported ${imported} entries!`;$('importMsg').classList.add('show');setTimeout(()=>$('importMsg').classList.remove('show'),2000);}
     refreshWatched();refresh();
   }catch(e){alert('Invalid JSON file');}
   input.value='';
@@ -937,24 +996,24 @@ async function importWatched(input){
 const JUNK_PATTERNS=['/attachments','monstermods','microtransactions','/timelines/','stashskins','/fx/','/mat/','/ao/','/epk/','/graph/','/audio/','/pet/','/clone/','playersummoned','essencemoddaemons','tormentedspirits','/daemon/','bossroomminimapicon','/environment/','hairstyles','/outfits/','/runemarked'];
 function isJunk(p){const l=p.toLowerCase();return JUNK_PATTERNS.some(j=>l.includes(j));}
 
-async function loadDb(){$('dbCount').textContent='Loading...';db=await(await fetch('/api/database')).json();$('dbCount').textContent=db.length+' entities';filterDb();}
+async function loadDb(){$('dbCount').textContent='Loading...';await ensureDisplayRulesLoaded();db=await(await fetch('/api/database')).json();$('dbCount').textContent=db.length+' entities';filterDb();}
 function filterDb(){
   const s=($('dbSearch')?.value||'').toLowerCase();const cats=new Set();const hj=$('dbHideJunk')?.checked;
   const f=db.filter(p=>{if(hj&&isJunk(p))return false;if(s&&!p.toLowerCase().includes(s))return false;const c=getCat(p);cats.add(c);return!dbCatFilter||c===dbCatFilter;});
   $('dbCatFilters').innerHTML=['All',...[...cats].sort()].map(c=>
     `<button class="filter-btn ${dbCatFilter===(c==='All'?'':c)?'active':''}" onclick="setDbCat('${c==='All'?'':c}')">${c}</button>`).join('');
   const show=f.slice(0,200);
-  $('dbBody').innerHTML=show.map(p=>{const isW=watched.some(w=>p.includes(w.pattern));
+  $('dbBody').innerHTML=show.map(p=>{const isW=displayRuleIndexForPath(p)>=0;
     return`<tr class="${isW?'watched':''}"><td><span class="db-cat">${getCat(p)}</span></td>
     <td class="db-path" title="${p}">${p}</td>
-    <td>${isW?`<button class="btn btn-rm" onclick="rmByMeta('${esc(p)}')">-</button>`
-             :`<button class="btn btn-add" onclick="dbWatch('${esc(p)}')">Watch</button>`}</td></tr>`;
+    <td>${isW?`<button class="btn btn-rm" title="Remove matching display rule" onclick="removeRuleForPath('${esc(p)}')">-</button>`
+             :`<button class="btn btn-add" title="Create a display rule" onclick="dbRule('${esc(p)}')">Rule</button>`}</td></tr>`;
   }).join('')+(f.length>200?`<tr><td colspan=3 style="color:#666">Showing 200/${f.length}. Narrow search.</td></tr>`:'');
   $('dbCount').textContent=f.length+' matches';
 }
 function setDbCat(c){dbCatFilter=c;filterDb();}
 function getCat(p){const parts=p.split('/');return parts.length>=2?parts[1]:'?';}
-async function dbWatch(path){const def=path.split('/').pop();const nick=prompt('Nickname for radar:',def);if(nick===null)return;await doAdd(path,nick||def,'#ff5555');filterDb();}
+async function dbRule(path){const def=path.split('/').pop();const nick=prompt('Nickname for radar:',def);if(nick===null)return;await addMetadataDisplayRule(path,nick||def,'#ff5555');filterDb();}
 
 // ── SETTINGS ──
 const settingsDef = [
@@ -969,7 +1028,7 @@ const settingsDef = [
     {key:'showLandmarks',label:'Landmarks',type:'bool'},
     {key:'showTerrain',label:'Terrain',type:'bool'},
     {key:'showStatusBar',label:'Status HUD (top-left)',type:'bool'},
-    {key:'showWatchedLabels',label:'Watched Entity Labels',type:'bool'},
+    {key:'showWatchedLabels',label:'User Rule Labels',type:'bool'},
     {key:'persistEntities',label:'Remember Entities Beyond Bubble',type:'bool'},
   ]},
   {section:'Label Toggles (dot still shown, only text hidden)',items:[
@@ -1009,7 +1068,7 @@ const settingsDef = [
     {key:'chestDotSize',label:'Chest',type:'num',min:1,max:30,step:0.5},
     {key:'transitionDotSize',label:'Transition',type:'num',min:1,max:30,step:0.5},
     {key:'playerDotSize',label:'Player',type:'num',min:1,max:30,step:0.5},
-    {key:'watchedDotSize',label:'Watched Entity',type:'num',min:1,max:30,step:0.5},
+    {key:'watchedDotSize',label:'User Rule Entity',type:'num',min:1,max:30,step:0.5},
   ]},
   {section:'Outline',items:[
     {key:'dotOutlineWidth',label:'Dot Outline Width',type:'num',min:0,max:10,step:0.5},
@@ -1022,7 +1081,7 @@ const settingsDef = [
     {key:'landmarkFontSize',label:'Landmarks',type:'num',min:6,max:72,step:1},
     {key:'transitionFontSize',label:'Transitions',type:'num',min:6,max:72,step:1},
     {key:'chestFontSize',label:'Chests',type:'num',min:6,max:72,step:1},
-    {key:'watchedFontSize',label:'Watched Labels',type:'num',min:6,max:72,step:1},
+    {key:'watchedFontSize',label:'User Rule Labels',type:'num',min:6,max:72,step:1},
     {key:'nameplateFontSize',label:'HP Nameplates',type:'num',min:6,max:72,step:1},
   ]},
   {section:'Colors',items:[
@@ -1035,7 +1094,7 @@ const settingsDef = [
     {key:'transitionColor',label:'Transition',type:'color'},
     {key:'playerColor',label:'Player',type:'color'},
     {key:'landmarkColor',label:'Landmark',type:'color'},
-    {key:'watchedColor',label:'Watched Entity',type:'color'},
+    {key:'watchedColor',label:'User Rule Entity',type:'color'},
   ]},
   {section:'Terrain / Map Outline',items:[
     {key:'terrainOpacity',label:'Overlay Opacity',type:'num',min:0,max:1,step:0.05},
@@ -1654,7 +1713,7 @@ const minimapDef = [
     {key:'minimapLabelUnique',label:'Label: Unique Monsters',type:'bool'},
     {key:'minimapLabelTransition',label:'Label: Transitions / Exits',type:'bool'},
     {key:'minimapLabelNpc',label:'Label: POI NPCs',type:'bool'},
-    {key:'minimapLabelWatched',label:'Label: Watched Entities',type:'bool'},
+    {key:'minimapLabelWatched',label:'Label: User Rules',type:'bool'},
     {key:'minimapLabelFontSize',label:'Label Font Size',type:'num',min:6,max:36,step:1},
   ]},
 ];
@@ -2063,7 +2122,7 @@ try{
   const savedTab=localStorage.getItem('radarActiveTab')==='watched'?'display':localStorage.getItem('radarActiveTab');
   if(savedTab&&$('tab-'+savedTab))showTab(savedTab);
 }catch{}
-ensureHotkeyLegend();refresh();refreshWatched();setInterval(refresh,2000);setInterval(inspAutoTick,2000);
+ensureHotkeyLegend();refresh();ensureDisplayRulesLoaded();setInterval(refresh,2000);setInterval(inspAutoTick,2000);
 </script></body></html>
 """;
 }

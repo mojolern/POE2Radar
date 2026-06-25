@@ -373,6 +373,7 @@ public sealed class RadarApp : IDisposable
         _entities = _live.Entities(areaInstance, _radarSettings.ShowPreloadedMechanicLocations);
         _modCatalog.Observe(_entities);
         _priceBook.SetLeagueOverride(_radarSettings.GroundItems.League);
+        _priceBook.SetDetectedLeague(_live.LeagueName(areaInstance));
         _priceBook.RefreshIfDue();
         _itemLabels = BuildItemLabels(_entities);
         _runeLabels = BuildRuneLabels(inGameState);
@@ -531,6 +532,7 @@ public sealed class RadarApp : IDisposable
     {
         var settings = _radarSettings.GroundItems;
         if (!settings.Enabled || !_priceBook.IsLoaded) return Array.Empty<ItemLabel>();
+        if (_runeforge.PanelOpen) return Array.Empty<ItemLabel>();
 
         var categories = new HashSet<string>(
             settings.Categories ?? new List<string>(),

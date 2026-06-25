@@ -59,7 +59,7 @@ public static class Poe2
     {
         public const int AreaInfoPtr      = 0x0A0;  // ✓ → AreaInfo; +0x00 → UTF-16 "Code\0Name\0" (Code validated 'G1_town')
         public const int LocalPlayer      = 0x5B8;  // ✓ → player Entity (PoE update 2026-06-25; old 0x5A0 drifted)
-        public const int ServerDataPtr    = 0x580;  // candidate (heap ptr just before the player slot)
+        public const int ServerDataPtr    = 0x598;  // -> ServerData (PoE update 2026-06-25; old 0x580 drifted)
         public const int AwakeEntities    = 0x6D8;  // ✓ StdMap of live entities (PoE update 2026-06-25; old 0x6C0 drifted)
         public const int SleepingEntities = 0x6E8;  // ✓ StdMap of sleeping entities (PoE update 2026-06-25; old 0x6D0 drifted)
         public const int TerrainMetadata  = 0x8B8;  // ✓ TerrainStruct base (PoE update 2026-06-25; old 0x8A0 drifted)
@@ -253,6 +253,7 @@ public static class Poe2
         public const int InvArrayStride = 0x18;
         public const int InvArrayId = 0x00;
         public const int InvArrayPtr = 0x08;
+        public const int League = 0x21E0;
     }
 
     public static class Inventory

@@ -69,6 +69,9 @@ if (HasFlag(args, "--watch"))
 if (HasFlag(args, "--tiles"))
     return RunTiles(process, reader);
 
+if (HasFlag(args, "--league"))
+    return RunLeague(process, reader, TryGetStringArg(args, "--needle"));
+
 if (HasFlag(args, "--entry-snapshot"))
     return RunEntrySnapshot(
         process,
@@ -305,6 +308,7 @@ Console.WriteLine("  --cheat-scan               read-only scan for startup byte-
 Console.WriteLine("  --atlas-probe [--atlas-child N] [--atlas-dump-node 0xADDR]  discover Atlas panel/node UI candidates");
 Console.WriteLine("  --atlas-snapshot [--atlas-samples N]  validate the Core Atlas snapshot reader");
 Console.WriteLine("  --atlas-rect-scan [--atlas-samples N]  scan Atlas nodes for final screen/client rect offsets");
+Console.WriteLine("  --league [--needle str]  read the game league from ServerData and optionally scan nearby strings");
 Console.WriteLine("  --entry-snapshot [--entry-all] [--max-entities N] [--ui-max N]");
 Console.WriteLine("                             one-shot awake/sleeping/UI/terrain snapshot for map-entry research");
 Console.WriteLine("  --rune-ui-probe [--ui-max N] [--context-children N]");
@@ -676,7 +680,7 @@ static int RunTiles(ProcessHandle process, MemoryReader reader)
 {
     var (_, _, ai, _) = ResolveChain(process, reader);
     if (ai == 0) { Console.Error.WriteLine("Could not resolve chain (in game?)."); return 1; }
-    var terrain = ai + 0x8A0;
+    var terrain = ai + Poe2.AreaInstance.TerrainMetadata;
     reader.TryReadStruct<long>(terrain + 0x18, out var tilesX);
     reader.TryReadStruct<nint>(terrain + 0x28, out var first);
     reader.TryReadStruct<nint>(terrain + 0x30, out var last);
@@ -720,6 +724,52 @@ static int RunTiles(ProcessHandle process, MemoryReader reader)
             for (var i = 0; i < buf.Length; i += 16)
                 Console.WriteLine($"  +0x{i:X2}  {string.Join(' ', Enumerable.Range(0, 16).Select(j => buf[i + j].ToString("X2")))}");
     }
+    return 0;
+}
+
+static int RunLeague(ProcessHandle process, MemoryReader reader, string? needle)
+{
+    var (_, _, areaInstance, _) = ResolveChain(process, reader);
+    if (areaInstance == 0) { Console.Error.WriteLine("Could not resolve chain (in game?)."); return 1; }
+
+    var serverData = SafePtr(reader, areaInstance + Poe2.AreaInstance.ServerDataPtr);
+    var league = serverData == 0 ? "" : ReadStdWString(reader, serverData + Poe2.ServerData.League);
+
+    Console.WriteLine();
+    Console.WriteLine("League probe");
+    Console.WriteLine("------------");
+    Console.WriteLine($"AreaInstance : 0x{areaInstance:X16}");
+    Console.WriteLine($"ServerData   : 0x{serverData:X16} (AreaInstance+0x{Poe2.AreaInstance.ServerDataPtr:X})");
+    Console.WriteLine($"League       : '{league}' (ServerData+0x{Poe2.ServerData.League:X})");
+
+    if (serverData == 0 || string.IsNullOrWhiteSpace(needle))
+        return 0;
+
+    Console.WriteLine();
+    Console.WriteLine($"Scanning ServerData for strings containing '{needle}'...");
+    var hits = 0;
+    for (var offset = 0; offset < 0x3000; offset += 8)
+    {
+        var direct = ReadStdWString(reader, serverData + offset);
+        if (direct.Contains(needle, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine($"  std::wstring +0x{offset:X}: '{direct}'");
+            hits++;
+        }
+
+        var ptr = SafePtr(reader, serverData + offset);
+        if (ptr == 0) continue;
+        var utf16 = reader.ReadStringUtf16(ptr, 96);
+        if (utf16.Contains(needle, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine($"  ptr utf16    +0x{offset:X}: 0x{ptr:X16} -> '{utf16}'");
+            hits++;
+        }
+    }
+
+    if (hits == 0)
+        Console.WriteLine("  no matching strings found in ServerData scan window");
+
     return 0;
 }
 

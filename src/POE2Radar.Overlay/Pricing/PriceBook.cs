@@ -86,6 +86,7 @@ public sealed class PriceBook
     private DateTime _lastFetchUtc = DateTime.MinValue;
     private string _league = "";
     private string? _leagueOverride;
+    private volatile string? _detectedLeague;
     private static IReadOnlyList<PriceLeagueInfo>? s_leagueOptions;
     private static DateTime s_leagueOptionsFetchedUtc = DateTime.MinValue;
 
@@ -126,6 +127,15 @@ public sealed class PriceBook
         if (v == _leagueOverride) return;
         _leagueOverride = v;
         _lastFetchUtc = DateTime.MinValue; // force the next RefreshIfDue to re-fetch
+    }
+
+    /// <summary>Set/clear the league read from game memory. Manual dashboard override still wins.</summary>
+    public void SetDetectedLeague(string? league)
+    {
+        var v = string.IsNullOrWhiteSpace(league) ? null : league.Trim();
+        if (v == _detectedLeague) return;
+        _detectedLeague = v;
+        if (_leagueOverride == null) _lastFetchUtc = DateTime.MinValue;
     }
 
     /// <summary>Call periodically (cheap when not due). Kicks a background fetch when stale and not already running.</summary>
@@ -269,20 +279,27 @@ public sealed class PriceBook
         finally { _fetching = false; }
     }
 
-    /// <summary>Discover the current league name via poe2scout's /Leagues (its Value strings are exactly what
-    /// poe.ninja expects). A configured override wins; otherwise pick the current softcore league.</summary>
+    /// <summary>Discover the current league name. Manual override wins; otherwise prefer the league read
+    /// from game memory, then fall back to poe2scout's current softcore league.</summary>
     private async Task<string> ResolveLeagueAsync()
     {
         if (_leagueOverride != null) return _leagueOverride;
+        var detected = _detectedLeague;
         try
         {
             var leagues = await GetLeagueOptionsAsync().ConfigureAwait(false);
+            if (detected != null)
+            {
+                var match = leagues.FirstOrDefault(l => string.Equals(l.Value, detected, StringComparison.OrdinalIgnoreCase));
+                return match?.Value ?? detected;
+            }
+
             var pick = leagues.FirstOrDefault(l => l.IsCurrent && !l.Hardcore)
                        ?? leagues.FirstOrDefault(l => l.IsCurrent)
                        ?? leagues.FirstOrDefault();
             return pick?.Value ?? "";
         }
-        catch { return ""; }
+        catch { return detected ?? ""; }
     }
 
     // Convert poe.ninja core.rates → our Exalted-per-Divine / Exalted-per-Chaos. rates are "units per

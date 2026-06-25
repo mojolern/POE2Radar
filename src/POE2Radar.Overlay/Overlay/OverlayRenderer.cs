@@ -3,6 +3,7 @@ using System.Numerics;
 using POE2Radar.Core.Game;
 using static POE2Radar.Core.Game.JunkFilter;
 using POE2Radar.Core.Pathfinding;
+using POE2Radar.Overlay.Web;
 using Vortice.Direct2D1;
 using Vortice.DirectWrite;
 using Vortice.Mathematics;
@@ -1050,6 +1051,15 @@ public sealed class OverlayRenderer : IDisposable
         return null;
     }
 
+    private static bool IsUserMetadataRule(DisplayRule? rule)
+    {
+        if (rule?.Source == null) return false;
+        return string.Equals(rule.Source, "Watched", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(rule.Source, "User", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(rule.Source, "Database", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(rule.Source, "Live Entity", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void DrawMap(ID2D1RenderTarget rt, RenderContext ctx)
     {
         var baseCenter = new NumVec2(
@@ -1137,7 +1147,7 @@ public sealed class OverlayRenderer : IDisposable
             if (ctx.DisplayRules != null && displayRule == null) continue;
             if (displayRule?.Hide == true) continue;
             var forceDraw = displayRule?.Force == true;
-            var isWatchedRule = string.Equals(displayRule?.Source, "Watched", StringComparison.OrdinalIgnoreCase);
+            var isWatchedRule = IsUserMetadataRule(displayRule);
             var styles = rs?.Styles;
             var mechMatch = styles != null ? MatchMechanic(styles, e.Metadata) : null;
             var isMechanicEntity = mechMatch != null || e.IsLeagueMechanic || e.IsMechanicAnchor;
@@ -1637,7 +1647,7 @@ public sealed class OverlayRenderer : IDisposable
             if (ctx.DisplayRules != null && displayRule == null) continue;
             if (displayRule?.Hide == true) continue;
             var forceDraw = displayRule?.Force == true;
-            var isWatchedRule = string.Equals(displayRule?.Source, "Watched", StringComparison.OrdinalIgnoreCase);
+            var isWatchedRule = IsUserMetadataRule(displayRule);
             var minimapMechanicStyle = rs.Styles != null ? MatchMechanic(rs.Styles, e.Metadata) : null;
             var minimapMechanic = e.IsLeagueMechanic ||
                 e.IsMechanicAnchor ||

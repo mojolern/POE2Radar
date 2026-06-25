@@ -225,6 +225,21 @@ public sealed class Poe2Live
         return _areaCode;
     }
 
+    private string _league = ""; private nint _leagueFor = -1;
+
+    /// <summary>
+    /// Current game league name from AreaInstance ServerData, including HC prefix when present.
+    /// Cached per area because the pointer is stable until area transition.
+    /// </summary>
+    public string LeagueName(nint areaInstance)
+    {
+        if (areaInstance == _leagueFor) return _league;
+        _leagueFor = areaInstance;
+        var serverData = Ptr(areaInstance + Poe2.AreaInstance.ServerDataPtr);
+        _league = serverData == 0 ? "" : ReadStdWString(serverData + Poe2.ServerData.League);
+        return _league;
+    }
+
     private nint _plPlayer, _plPlayerFor;
     private nint PlayerComp(nint localPlayer)
     {
